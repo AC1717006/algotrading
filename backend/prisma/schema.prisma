@@ -1,0 +1,263 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────────
+// 1. USERS
+// ─────────────────────────────────────────────────────────────────
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String
+  role      UserRole @default(VIEWER)
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  orders    Order[]
+  auditLogs AuditLog[]
+
+  @@map("users")
+}
+
+enum UserRole {
+  ADMIN
+  TRADER
+  VIEWER
+}
+
+// ─────────────────────────────────────────────────────────────────
+// 2. SETTINGS
+// ─────────────────────────────────────────────────────────────────
+model Setting {
+  id          String   @id @default(uuid())
+  key         String   @unique
+  value       String
+  description String   @default("")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("settings")
+}
+
+// ─────────────────────────────────────────────────────────────────
+// 3. STRATEGIES
+// ─────────────────────────────────────────────────────────────────
+model Strategy {
+  id          String       @id @default(uuid())
+  name        String
+  type        StrategyType
+  symbol      String
+  exchange    String       @default("NSE")
+  timeframe   String       @default("5minute")
+  parameters  Json
+  riskConfig  Json         @map("risk_config")
+  isActive    Boolean      @default(false) @map("is_active")
+  mode        TradingMode  @default(PAPER)
+  totalTrades Int          @default(0) @map("total_trades")
+  wins        Int          @default(0)
+  losses      Int          @default(0)
+  totalPnl    Float        @default(0) @map("total_pnl")
+  createdAt   DateTime     @default(now()) @map("created_at")
+  updatedAt   DateTime     @updatedAt @map("updated_at")
+
+  signals Signal[]
+
+  @@map("strategies")
+}
+
+enum StrategyType {
+  EMA_CROSSOVER
+  RSI
+  MACD
+  BREAKOUT
+  CUSTOM
+}
+
+enum TradingMode {
+  PAPER
+  LIVE
+}
+
+// ─────────────────────────────────────────────────────────────────
+// 4. ORDERS
+// ─────────────────────────────────────────────────────────────────
+model Order {
+  id            String      @id @default(uuid())
+  userId        String      @map("user_id")
+  symbol        String
+  exchange      String      @default("NSE")
+  side          OrderSide
+  qty           Int
+  price         Float?
+  orderType     OrderType   @default(MARKET) @map("order_type")
+  product       String      @default("MIS")
+  status        OrderStatus @default(PENDING)
+  mode          TradingMode
+  brokerOrderId String?     @unique @map("broker_order_id")
+  strategyId    String?     @map("strategy_id")
+  tag           String?
+  rejectReason  String?     @map("reject_reason")
+  placedAt      DateTime    @default(now()) @map("placed_at")
+  filledAt      DateTime?   @map("filled_at")
+  updatedAt     DateTime    @updatedAt @map("updated_at")
+
+  user   User    @relation(fields: [userId], references: [id])
+  trades Trade[]
+
+  @@index([userId])
+  @@index([symbol])
+  @@index([status])
+  @@index([mode])
+  @@index([placedAt])
+  @@map("orders")
+}
+
+enum OrderSide {
+  BUY
+  SELL
+}
+
+enum OrderType {
+  MARKET
+  LIMIT
+  SL
+  SL_M
+}
+
+enum OrderStatus {
+  PENDING
+  OPEN
+  FILLED
+  CANCELLED
+  REJECTED
+  TRIGGER_PENDING
+}
+
+// ─────────────────────────────────────────────────────────────────
+// 5. TRADES
+// ─────────────────────────────────────────────────────────────────
+model Trade {
+  id         String      @id @default(uuid())
+  orderId    String      @map("order_id")
+  symbol     String
+  exchange   String      @default("NSE")
+  side       OrderSide
+  qty        Int
+  entryPrice Float       @map("entry_price")
+  exitPrice  Float?      @map("exit_price")
+  pnl        Float?
+  charges    Float       @default(0)
+  mode       TradingMode
+  closedAt   DateTime?   @map("closed_at")
+  createdAt  DateTime    @default(now()) @map("created_at")
+
+  order Order @relation(fields: [orderId], references: [id])
+
+  @@index([symbol])
+  @@index([mode])
+  @@index([createdAt])
+  @@map("trades")
+}
+
+// ─────────────────────────────────────────────────────────────────
+// 6. POSITIONS
+// ─────────────────────────────────────────────────────────────────
+model Position {
+  id             String      @id @default(uuid())
+  symbol         String
+  exchange       String      @default("NSE")
+  qty            Int
+  avgPrice       Float       @map("avg_price")
+  currentPrice   Float       @map("current_price")
+  unrealizedPnl  Float       @default(0) @map("unrealized_pnl")
+  realizedPnl    Float       @default(0) @map("realized_pnl")
+  stopLoss       Float?      @map("stop_loss")
+  target         Float?
+  product        String      @default("MIS")
+  mode           TradingMode
+  isOpen         Boolean     @default(true) @map("is_open")
+  strategyId     String?     @map("strategy_id")
+  openedAt       DateTime    @default(now()) @map("opened_at")
+  closedAt       DateTime?   @map("closed_at")
+  updatedAt      DateTime    @updatedAt @map("updated_at")
+
+  @@unique([symbol, mode, isOpen], name: "symbol_mode_open")
+  @@index([isOpen])
+  @@index([mode])
+  @@map("positions")
+}
+
+// ─────────────────────────────────────────────────────────────────
+// 7. SIGNALS
+// ─────────────────────────────────────────────────────────────────
+model Signal {
+  id          String      @id @default(uuid())
+  strategyId  String      @map("strategy_id")
+  symbol      String
+  action      OrderSide
+  price       Float
+  reason      String
+  indicators  Json?
+  isExecuted  Boolean     @default(false) @map("is_executed")
+  createdAt   DateTime    @default(now()) @map("created_at")
+
+  strategy Strategy @relation(fields: [strategyId], references: [id])
+
+  @@index([strategyId])
+  @@index([symbol])
+  @@index([createdAt])
+  @@map("signals")
+}
+
+// ─────────────────────────────────────────────────────────────────
+// 8. SYSTEM LOGS
+// ─────────────────────────────────────────────────────────────────
+model SystemLog {
+  id        String   @id @default(uuid())
+  level     LogLevel
+  category  String   @default("SYSTEM")
+  message   String
+  meta      Json?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([level])
+  @@index([category])
+  @@index([createdAt])
+  @@map("system_logs")
+}
+
+enum LogLevel {
+  DEBUG
+  INFO
+  WARN
+  ERROR
+  FATAL
+}
+
+// ─────────────────────────────────────────────────────────────────
+// 9. AUDIT LOGS
+// ─────────────────────────────────────────────────────────────────
+model AuditLog {
+  id         String   @id @default(uuid())
+  userId     String   @map("user_id")
+  action     String
+  resource   String
+  resourceId String?  @map("resource_id")
+  meta       Json?
+  ipAddress  String?  @map("ip_address")
+  userAgent  String?  @map("user_agent")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([action])
+  @@index([resource])
+  @@index([createdAt])
+  @@map("audit_logs")
+}

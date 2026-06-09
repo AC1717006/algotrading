@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.next/
+.env
+.env.local
+.env.production
+*.log
+logs/
+coverage/
+.nyc_output/
+.DS_Store
+Thumbs.db
+*.pem
+*.key
+prisma/migrations/
+!prisma/migrations/.gitkeep
