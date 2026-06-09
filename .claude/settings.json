@@ -2,7 +2,10 @@
   "permissions": {
     "allow": [
       "Bash(find /mnt/d/algo2 -type f | sort)",
-      "Read(//mnt/d/**)"
+      "Read(//mnt/d/**)",
+      "Bash(node -e \"const p=require\\('./package.json'\\); console.log\\('dotenv:', p.dependencies.dotenv ?? 'MISSING'\\); console.log\\('swagger-jsdoc:', p.dependencies['swagger-jsdoc'] ?? 'MISSING'\\); console.log\\('@types/swagger-jsdoc:', p.devDependencies['@types/swagger-jsdoc'] ?? 'MISSING'\\); console.log\\('@types/swagger-ui-express:', p.devDependencies['@types/swagger-ui-express'] ?? 'MISSING'\\); console.log\\('@types/node-cron:', p.devDependencies['@types/node-cron'] ?? 'MISSING'\\);\")",
+      "PowerShell(Set-Location \"d:\\\\algo2\\\\backend\"; $env:DATABASE_URL=\"postgresql://placeholder:placeholder@localhost:5432/placeholder\"; npx prisma generate 2>&1)",
+      "PowerShell(Set-Location \"d:\\\\algo2\\\\backend\"; $env:DATABASE_URL=\"postgresql://placeholder:placeholder@localhost:5432/placeholder\"; $env:NODE_TLS_REJECT_UNAUTHORIZED=\"0\"; npx prisma generate 2>&1)"
     ]
   }
 }

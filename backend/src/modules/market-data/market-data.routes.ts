@@ -31,7 +31,7 @@ router.get(
   async (req: Request, res: Response): Promise<void> => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      res.status(400).json(<ApiResponse>{ success: false, errors: errors.mapped() });
+      res.status(400).json({ success: false, errors: errors.mapped() } as any);
       return;
     }
     const { symbol, interval, from, to } = req.query as Record<string, string>;
@@ -57,7 +57,7 @@ router.get(
   async (req: Request, res: Response): Promise<void> => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      res.status(400).json(<ApiResponse>{ success: false, errors: errors.mapped() });
+      res.status(400).json({ success: false, errors: errors.mapped() } as any);
       return;
     }
     const { symbols } = req.query as { symbols: string };

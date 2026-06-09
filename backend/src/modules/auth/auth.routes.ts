@@ -37,7 +37,7 @@ router.post(
   async (req: Request, res: Response): Promise<void> => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      res.status(400).json(<ApiResponse>{ success: false, errors: errors.mapped() });
+      res.status(400).json({ success: false, errors: errors.mapped() } as any);
       return;
     }
     const { email, password } = req.body as { email: string; password: string };
@@ -105,7 +105,7 @@ router.post(
   async (req: Request, res: Response): Promise<void> => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      res.status(400).json(<ApiResponse>{ success: false, errors: errors.mapped() });
+      res.status(400).json({ success: false, errors: errors.mapped() } as any);
       return;
     }
     const user = (req as AuthRequest).user;
@@ -145,7 +145,7 @@ router.post(
   async (req: Request, res: Response): Promise<void> => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      res.status(400).json(<ApiResponse>{ success: false, errors: errors.mapped() });
+      res.status(400).json({ success: false, errors: errors.mapped() } as any);
       return;
     }
     const { email, password, role } = req.body as { email: string; password: string; role: 'ADMIN' | 'TRADER' | 'VIEWER' };

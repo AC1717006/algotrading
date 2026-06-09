@@ -22,8 +22,6 @@ if (config.NODE_ENV !== 'production') {
   global.__prisma = prisma;
 }
 
-prisma.$on('error', (e) => logger.error('Prisma error', { message: e.message }));
-prisma.$on('warn', (e) => logger.warn('Prisma warn', { message: e.message }));
 
 export async function connectDatabase(): Promise<void> {
   await prisma.$connect();

@@ -7,7 +7,7 @@ import { WebSocketService } from './modules/market-data/websocket.service';
 import { strategyEngine } from './modules/strategies/strategy.engine';
 import { s3Service } from './modules/s3/s3.service';
 import { riskManager } from './modules/risk/risk-manager';
-import { telegramBot } from './modules/notifications/telegram.service';
+import { telegramService } from './modules/notifications/telegram.service';
 
 const log = logger.child({ category: 'Server' });
 
@@ -44,7 +44,7 @@ async function bootstrap(): Promise<void> {
   // ─── Upstox market feed (active strategies' symbols) ─────────────────────
   try {
     const activeStrategies = await prisma.strategy.findMany({ where: { isActive: true } });
-    const symbols = [...new Set(activeStrategies.map((s) => s.symbol).filter(Boolean))];
+    const symbols = [...new Set(activeStrategies.map((s) => s.symbol).filter(Boolean))] as string[];
     if (symbols.length) {
       await wsService.connectUpstoxFeed(symbols);
       log.info('Upstox market feed connected', { symbols });
@@ -56,7 +56,7 @@ async function bootstrap(): Promise<void> {
   // ─── Listen ───────────────────────────────────────────────────────────────
   server.listen(config.PORT, () => {
     log.info(`AlgoTrader API listening`, { port: config.PORT, env: config.NODE_ENV });
-    telegramBot.notify(`AlgoTrader started on port ${config.PORT} (${config.NODE_ENV})`).catch(() => void 0);
+    telegramService.notify(`AlgoTrader started on port ${config.PORT} (${config.NODE_ENV})`).catch(() => void 0);
   });
 
   // ─── Graceful shutdown ────────────────────────────────────────────────────

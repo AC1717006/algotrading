@@ -54,7 +54,7 @@ export class StrategyEngine {
       exchange: dbRow.exchange,
       timeframe: dbRow.timeframe,
       parameters: dbRow.parameters as StrategyParams,
-      riskConfig: dbRow.riskConfig as StrategyRiskConfig,
+      riskConfig: dbRow.riskConfig as unknown as StrategyRiskConfig,
       mode: dbRow.mode as 'PAPER' | 'LIVE',
     };
 
@@ -103,7 +103,7 @@ export class StrategyEngine {
         action: signal.type,
         price: signal.price,
         reason: signal.reason,
-        indicators: signal.indicators as Record<string, unknown>,
+        indicators: signal.indicators as any,
       },
     });
 

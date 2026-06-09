@@ -55,7 +55,7 @@ router.put(
   async (req: Request, res: Response): Promise<void> => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      res.status(400).json(<ApiResponse>{ success: false, errors: errors.mapped() });
+      res.status(400).json({ success: false, errors: errors.mapped() } as any);
       return;
     }
     const { value } = req.body as { value: string };

@@ -17,7 +17,7 @@ export function auditLog(action: string, resource: string) {
               action,
               resource,
               resourceId: req.params['id'] ?? null,
-              meta: typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : {},
+              meta: typeof body === 'object' && body !== null ? JSON.parse(JSON.stringify(body)) : {},
               ipAddress: req.ip ?? req.socket.remoteAddress,
               userAgent: req.headers['user-agent'],
             },
