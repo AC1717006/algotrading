@@ -184,7 +184,9 @@ export class WebSocketService {
         log.error('Upstox feed error', { e });
       });
     } catch (err) {
-      log.error('Failed to connect Upstox feed', { err });
+      log.error('Failed to connect Upstox feed', {
+        err: err instanceof Error ? { message: err.message, stack: err.stack } : String(err),
+      });
       this.reconnectTimer = setTimeout(() => this.connectUpstoxFeed(instrumentKeys), 10_000);
     }
   }
