@@ -66,7 +66,7 @@ router.post(
     body('exchange').notEmpty(),
     body('instrumentToken').notEmpty(),
     body('side').isIn(['BUY', 'SELL']),
-    body('qty').isInt({ min: 1 }),
+    body('qty').optional().isInt({ min: 1 }),
     body('orderType').isIn(['MARKET', 'LIMIT', 'SL', 'SL_M']),
     body('product').isIn(['MIS', 'CNC', 'NRML']),
     body('currentPrice').isFloat({ min: 0.01 }),

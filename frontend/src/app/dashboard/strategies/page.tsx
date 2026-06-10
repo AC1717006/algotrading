@@ -3,13 +3,15 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import toast from 'react-hot-toast';
-import { strategyApi } from '@/lib/api';
+import { strategyApi, marketApi } from '@/lib/api';
 
 interface Strategy {
   id: string;
   name: string;
   type: string;
   symbol: string;
+  watchedSymbols: string[];
+  exchange: string;
   timeframe: string;
   isActive: boolean;
   mode: string;
@@ -17,13 +19,26 @@ interface Strategy {
   riskSettings: Record<string, unknown>;
 }
 
+interface MoverQuote {
+  symbol: string;
+  ltp: number;
+  changePercent: number;
+}
+
 export default function StrategiesPage() {
   const qc = useQueryClient();
   const [selected, setSelected] = useState<Strategy | null>(null);
+  const [newSymbol, setNewSymbol] = useState('');
 
   const { data: strategies, isLoading } = useQuery({
     queryKey: ['strategies'],
     queryFn: () => strategyApi.list().then((r) => (r.data as { data: Strategy[] }).data),
+  });
+
+  const { data: topMovers } = useQuery({
+    queryKey: ['top-movers'],
+    queryFn: () => marketApi.topMovers().then((r) => (r.data as { data: { gainers: MoverQuote[]; losers: MoverQuote[] } }).data),
+    refetchInterval: 10_000,
   });
 
   const enableMutation = useMutation({
@@ -41,6 +56,29 @@ export default function StrategiesPage() {
     mutationFn: (id: string) => strategyApi.delete(id),
     onSuccess: () => { toast.success('Strategy deleted'); qc.invalidateQueries({ queryKey: ['strategies'] }); setSelected(null); },
   });
+
+  const watchedSymbolsMutation = useMutation({
+    mutationFn: ({ id, watchedSymbols }: { id: string; watchedSymbols: string[] }) =>
+      strategyApi.update(id, { watchedSymbols }),
+    onSuccess: (_data, variables) => {
+      toast.success('Watchlist updated');
+      qc.invalidateQueries({ queryKey: ['strategies'] });
+      setSelected((prev) => (prev && prev.id === variables.id ? { ...prev, watchedSymbols: variables.watchedSymbols } : prev));
+      setNewSymbol('');
+    },
+    onError: () => toast.error('Failed to update watchlist'),
+  });
+
+  const addSymbol = (strategy: Strategy) => {
+    const sym = newSymbol.trim();
+    if (!sym) return;
+    if (strategy.watchedSymbols?.includes(sym)) { toast.error('Symbol already in watchlist'); return; }
+    watchedSymbolsMutation.mutate({ id: strategy.id, watchedSymbols: [...(strategy.watchedSymbols ?? []), sym] });
+  };
+
+  const removeSymbol = (strategy: Strategy, sym: string) => {
+    watchedSymbolsMutation.mutate({ id: strategy.id, watchedSymbols: (strategy.watchedSymbols ?? []).filter((s) => s !== sym) });
+  };
 
   if (isLoading) {
     return <div className="flex items-center justify-center h-64"><div className="w-8 h-8 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" /></div>;
@@ -108,6 +146,36 @@ export default function StrategiesPage() {
                     </div>
                   ))}
                 </div>
+
+                <div className="col-span-2">
+                  <p className="text-gray-500 mb-1.5">Watched Symbols</p>
+                  <div className="flex flex-wrap gap-1.5 mb-2">
+                    {(strategy.watchedSymbols ?? []).length === 0 && (
+                      <span className="text-gray-600">No additional symbols tracked.</span>
+                    )}
+                    {(strategy.watchedSymbols ?? []).map((sym) => (
+                      <span key={sym} className="inline-flex items-center gap-1.5 bg-gray-800 text-gray-300 font-mono px-2 py-1 rounded-md">
+                        {sym}
+                        <button onClick={() => removeSymbol(strategy, sym)} className="text-gray-500 hover:text-red-400">×</button>
+                      </span>
+                    ))}
+                  </div>
+                  <div className="flex gap-2">
+                    <input
+                      value={newSymbol}
+                      onChange={(e) => setNewSymbol(e.target.value)}
+                      placeholder="e.g. NSE_EQ|INE002A01018"
+                      className="flex-1 px-2.5 py-1.5 bg-gray-800 border border-gray-700 rounded-lg text-white font-mono text-xs placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-brand-500"
+                    />
+                    <button
+                      onClick={() => addSymbol(strategy)}
+                      disabled={watchedSymbolsMutation.isPending}
+                      className="btn-primary text-xs py-1.5 px-3"
+                    >
+                      Add Symbol
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
           </div>
@@ -119,6 +187,37 @@ export default function StrategiesPage() {
             <p className="text-xs text-gray-600 mt-1">Use the API to create strategies.</p>
           </div>
         )}
+      </div>
+
+      {/* Top Movers Watchlist */}
+      <div className="card">
+        <h2 className="text-sm font-semibold text-white mb-3">Top Movers</h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <p className="text-xs text-gray-500 mb-2">Top Gainers</p>
+            <div className="space-y-1">
+              {topMovers?.gainers.length ? topMovers.gainers.map((q) => (
+                <div key={q.symbol} className="flex justify-between text-xs py-1">
+                  <span className="text-gray-300 font-mono truncate">{q.symbol}</span>
+                  <span className="text-white">{q.ltp.toFixed(2)}</span>
+                  <span className="text-success">+{q.changePercent.toFixed(2)}%</span>
+                </div>
+              )) : <p className="text-xs text-gray-600">No data</p>}
+            </div>
+          </div>
+          <div>
+            <p className="text-xs text-gray-500 mb-2">Top Losers</p>
+            <div className="space-y-1">
+              {topMovers?.losers.length ? topMovers.losers.map((q) => (
+                <div key={q.symbol} className="flex justify-between text-xs py-1">
+                  <span className="text-gray-300 font-mono truncate">{q.symbol}</span>
+                  <span className="text-white">{q.ltp.toFixed(2)}</span>
+                  <span className="text-danger">{q.changePercent.toFixed(2)}%</span>
+                </div>
+              )) : <p className="text-xs text-gray-600">No data</p>}
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );

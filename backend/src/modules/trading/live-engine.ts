@@ -36,6 +36,11 @@ export class LiveTradingEngine {
     req: PlaceOrderRequest,
     currentPrice: number,
   ): Promise<{ orderId: string }> {
+    if (!req.qty || req.qty < 1) {
+      const defaultQty = await prisma.setting.findUnique({ where: { key: 'default_qty' } });
+      req = { ...req, qty: Number(defaultQty?.value ?? 1) };
+    }
+
     // Fetch live equity for risk sizing
     let equity = 1_000_000;
     try {

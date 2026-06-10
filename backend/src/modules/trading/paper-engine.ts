@@ -39,6 +39,11 @@ export class PaperTradingEngine {
   ): Promise<{ orderId: string; tradeId?: string }> {
     const balance = await this.getBalance(userId);
 
+    if (!req.qty || req.qty < 1) {
+      const defaultQty = await prisma.setting.findUnique({ where: { key: 'default_qty' } });
+      req = { ...req, qty: Number(defaultQty?.value ?? 1) };
+    }
+
     const riskResult = await riskManager.check(userId, req, currentPrice, balance, 'PAPER');
     if (!riskResult.passed) {
       throw new AppError(400, `Risk check failed: ${riskResult.reason}`);

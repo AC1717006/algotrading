@@ -27,6 +27,11 @@ async function main(): Promise<void> {
     { key: 'circuit_breaker_active',    value: 'false',       description: 'Whether circuit breaker is currently active' },
     { key: 'telegram_alerts',           value: 'true',        description: 'Enable Telegram alert notifications' },
     { key: 'upstox_token_valid',        value: 'false',       description: 'Whether the current Upstox access token is valid' },
+    { key: 'default_qty',               value: '1',           description: 'Default quantity per trade when not specified' },
+    { key: 'max_trades_day',            value: String(config.MAX_TRADES_PER_DAY), description: 'Maximum number of trades per day' },
+    { key: 'max_loss_day',              value: '5000',        description: 'Maximum loss per day in Rs' },
+    { key: 'per_trade_loss_pct',        value: '1',           description: 'Per trade max loss % (stop-loss sizing)' },
+    { key: 'strategies_enabled',        value: 'true',        description: 'Master switch — enable/disable all strategies' },
   ];
 
   for (const s of defaults) {

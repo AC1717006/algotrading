@@ -78,6 +78,7 @@ export const marketApi = {
   candles: (params: Record<string, string>) => api.get('/market/candles', { params }),
   quotes: (symbols: string) => api.get('/market/quotes', { params: { symbols } }),
   ltp: (symbol?: string) => api.get('/market/ltp', { params: symbol ? { symbol } : {} }),
+  topMovers: () => api.get('/market/top-movers'),
 };
 
 export const s3Api = {
@@ -94,4 +95,5 @@ export const logsApi = {
 export const settingsApi = {
   list: () => api.get('/settings'),
   update: (key: string, value: string) => api.put(`/settings/${key}`, { value }),
+  updateBulk: (updates: Record<string, string>) => api.put('/settings/bulk/update', updates),
 };

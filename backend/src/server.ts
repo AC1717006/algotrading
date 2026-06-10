@@ -44,7 +44,9 @@ async function bootstrap(): Promise<void> {
   // ─── Upstox market feed (active strategies' symbols) ─────────────────────
   try {
     const activeStrategies = await prisma.strategy.findMany({ where: { isActive: true } });
-    const symbols = [...new Set(activeStrategies.map((s) => s.symbol).filter(Boolean))] as string[];
+    const symbols = [...new Set(
+      activeStrategies.flatMap((s) => [s.symbol, ...(s.watchedSymbols ?? [])]).filter(Boolean),
+    )] as string[];
     if (symbols.length) {
       await wsService.connectUpstoxFeed(symbols);
       log.info('Upstox market feed connected', { symbols });

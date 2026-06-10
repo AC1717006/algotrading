@@ -52,6 +52,7 @@ model Strategy {
   name        String
   type        StrategyType
   symbol      String
+  watchedSymbols String[]  @default([]) @map("watched_symbols")
   exchange    String       @default("NSE")
   timeframe   String       @default("5minute")
   parameters  Json

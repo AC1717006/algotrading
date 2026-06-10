@@ -16,15 +16,24 @@ const log = logger.child({ category: 'StrategyEngine' });
 
 type StrategyType = 'EMA_CROSSOVER' | 'RSI' | 'MACD' | 'BREAKOUT' | 'CUSTOM';
 
-const TIMEFRAME_CRON: Record<string, string> = {
-  '1minute':  '*/1 9-15 * * 1-5',
-  '3minute':  '*/3 9-15 * * 1-5',
-  '5minute':  '*/5 9-15 * * 1-5',
-  '10minute': '*/10 9-15 * * 1-5',
-  '15minute': '*/15 9-15 * * 1-5',
-  '30minute': '*/30 9-15 * * 1-5',
-  '1hour':    '0 9-15 * * 1-5',
-};
+const STRATEGY_CRON = '*/5 9-15 * * 1-5';
+
+function aggregateCandles(candles: Candle[], groupSize: number): Candle[] {
+  const result: Candle[] = [];
+  for (let i = 0; i < candles.length; i += groupSize) {
+    const group = candles.slice(i, i + groupSize);
+    if (group.length === 0) continue;
+    result.push({
+      timestamp: group[0]!.timestamp,
+      open: group[0]!.open,
+      high: Math.max(...group.map((c) => c.high)),
+      low: Math.min(...group.map((c) => c.low)),
+      close: group[group.length - 1]!.close,
+      volume: group.reduce((sum, c) => sum + c.volume, 0),
+    });
+  }
+  return result;
+}
 
 export class StrategyEngine {
   private jobs = new Map<string, cron.ScheduledTask>();
@@ -44,6 +53,9 @@ export class StrategyEngine {
   }
 
   private async runStrategy(strategyId: string): Promise<void> {
+    const masterSwitch = await prisma.setting.findUnique({ where: { key: 'strategies_enabled' } });
+    if (masterSwitch?.value === 'false') return;
+
     const dbRow = await prisma.strategy.findUnique({ where: { id: strategyId } });
     if (!dbRow || !dbRow.isActive) return;
 
@@ -61,16 +73,11 @@ export class StrategyEngine {
 
     const strategy = this.buildStrategy(cfg);
 
-    // Fetch historical candles
-    const today = new Date().toISOString().split('T')[0]!;
-    const yesterday = new Date(Date.now() - 86_400_000).toISOString().split('T')[0]!;
-
+    // Fetch last 50 1minute candles and aggregate into 5minute candles
     let candles: Candle[] = [];
     try {
-      const raw = cfg.timeframe.includes('minute')
-        ? await upstoxClient.getIntradayCandles(cfg.symbol, cfg.timeframe)
-        : await upstoxClient.getHistoricalCandles(cfg.symbol, cfg.timeframe, today, yesterday);
-      candles = raw
+      const raw = await upstoxClient.getIntradayCandles(cfg.symbol, '1minute');
+      const oneMinCandles = raw
         .map((c) => ({
           timestamp: new Date(c[0] as string).getTime(),
           open: c[1] as number,
@@ -79,7 +86,9 @@ export class StrategyEngine {
           close: c[4] as number,
           volume: c[5] as number,
         }))
-        .sort((a, b) => a.timestamp - b.timestamp);
+        .sort((a, b) => a.timestamp - b.timestamp)
+        .slice(-50);
+      candles = aggregateCandles(oneMinCandles, 5);
     } catch (err) {
       log.error('Failed to fetch candles', { strategyId, err });
       return;
@@ -165,9 +174,8 @@ export class StrategyEngine {
     const row = await prisma.strategy.findUnique({ where: { id: strategyId } });
     if (!row) throw new Error(`Strategy ${strategyId} not found`);
 
-    const cronExpr = TIMEFRAME_CRON[row.timeframe] ?? '*/5 9-15 * * 1-5';
     const job = cron.schedule(
-      cronExpr,
+      STRATEGY_CRON,
       () => this.runStrategy(strategyId).catch((e) => log.error('Strategy run error', { strategyId, e })),
       { scheduled: true, timezone: 'Asia/Kolkata' },
     );
@@ -185,7 +193,7 @@ export class StrategyEngine {
       mode: row.mode as 'PAPER' | 'LIVE',
       isActive: true,
     });
-    log.info('Strategy started', { name: row.name, cron: cronExpr });
+    log.info('Strategy started', { name: row.name, cron: STRATEGY_CRON });
   }
 
   async stopStrategy(strategyId: string): Promise<void> {

@@ -78,7 +78,7 @@ export interface PlaceOrderRequest {
   exchange: string;
   instrumentToken: string;
   side: OrderSide;
-  qty: number;
+  qty?: number;
   orderType: OrderType;
   product: Product;
   price?: number;

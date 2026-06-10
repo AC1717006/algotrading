@@ -100,7 +100,7 @@ export class RiskManager {
     }
 
     // 4. Max position size
-    const orderValue = order.qty * currentPrice;
+    const orderValue = (order.qty ?? 1) * currentPrice;
     const maxAllowed = (accountEquity * this.settings.maxPositionSizePct) / 100;
     if (orderValue > maxAllowed) {
       return {

@@ -5,6 +5,19 @@ import { logger } from '../../utils/logger';
 
 const log = logger.child({ category: 'MarketData' });
 
+const TOP_MOVERS_WATCHLIST = [
+  'NSE_EQ|INE009A01021', // Reliance
+  'NSE_EQ|INE040A01034', // HDFC Bank
+  'NSE_EQ|INE062A01020', // SBI
+  'NSE_EQ|INE090A01021', // ICICI Bank
+  'NSE_EQ|INE467B01029', // TCS
+  'NSE_EQ|INE148A01014', // Infosys
+  'NSE_EQ|INE669C01036', // Bajaj Finance
+  'NSE_EQ|INE585B01010', // Maruti
+  'NSE_EQ|INE029A01011', // ITC
+  'NSE_EQ|INE117A01022', // Wipro
+];
+
 interface RawQuote {
   last_price: number;
   ohlc?: { open: number; high: number; low: number; close: number };
@@ -64,6 +77,15 @@ class MarketDataService {
     }
 
     return result;
+  }
+
+  async getTopMovers(): Promise<{ gainers: Quote[]; losers: Quote[] }> {
+    const quotes = await this.getQuotes(TOP_MOVERS_WATCHLIST);
+    const sorted = Object.values(quotes).sort((a, b) => b.changePercent - a.changePercent);
+    return {
+      gainers: sorted.slice(0, 10).filter((q) => q.changePercent > 0),
+      losers: sorted.slice(-10).filter((q) => q.changePercent < 0).reverse(),
+    };
   }
 
   getLtp(symbol: string): number {
