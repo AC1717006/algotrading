@@ -32,8 +32,16 @@ interface Order {
   placedAt: string;
 }
 
-function formatCurrency(n: number) {
+function formatCurrency(n: number | null | undefined) {
+  if (n == null || isNaN(n)) return '—';
   return `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function formatTime(value: string | null | undefined, pattern: string) {
+  if (!value) return '—';
+  const d = new Date(value);
+  if (isNaN(d.getTime())) return '—';
+  return format(d, pattern);
 }
 
 export default function TradesPage() {
@@ -122,16 +130,16 @@ export default function TradesPage() {
             <tbody className="divide-y divide-gray-800">
               {trades?.map((t) => (
                 <tr key={t.id} className="hover:bg-gray-800/40">
-                  <td className="table-cell font-medium text-white">{t.symbol}</td>
-                  <td className="table-cell"><span className={t.txType === 'BUY' ? 'badge-green' : 'badge-red'}>{t.txType}</span></td>
-                  <td className="table-cell text-right">{t.quantity}</td>
+                  <td className="table-cell font-medium text-white">{t.symbol ?? '—'}</td>
+                  <td className="table-cell"><span className={t.txType === 'BUY' ? 'badge-green' : 'badge-red'}>{t.txType ?? '—'}</span></td>
+                  <td className="table-cell text-right">{t.quantity ?? '—'}</td>
                   <td className="table-cell text-right">{formatCurrency(t.price)}</td>
                   <td className="table-cell text-right">{formatCurrency(t.value)}</td>
                   <td className={`table-cell text-right font-medium ${(t.pnl ?? 0) > 0 ? 'text-green-400' : (t.pnl ?? 0) < 0 ? 'text-red-400' : 'text-gray-400'}`}>
                     {t.pnl != null ? formatCurrency(t.pnl) : '—'}
                   </td>
-                  <td className="table-cell text-center"><span className={t.mode === 'PAPER' ? 'badge-blue' : 'badge-red'}>{t.mode}</span></td>
-                  <td className="table-cell text-xs text-gray-400">{format(new Date(t.executedAt), 'dd MMM HH:mm')}</td>
+                  <td className="table-cell text-center"><span className={t.mode === 'PAPER' ? 'badge-blue' : 'badge-red'}>{t.mode ?? '—'}</span></td>
+                  <td className="table-cell text-xs text-gray-400">{formatTime(t.executedAt, 'dd MMM HH:mm')}</td>
                 </tr>
               ))}
             </tbody>
@@ -155,20 +163,20 @@ export default function TradesPage() {
             <tbody className="divide-y divide-gray-800">
               {orders?.map((o) => (
                 <tr key={o.id} className="hover:bg-gray-800/40">
-                  <td className="table-cell font-medium text-white">{o.symbol}</td>
-                  <td className="table-cell"><span className={o.side === 'BUY' ? 'badge-green' : 'badge-red'}>{o.side}</span></td>
-                  <td className="table-cell text-gray-300">{o.orderType}</td>
-                  <td className="table-cell text-gray-300">{o.product}</td>
-                  <td className="table-cell text-right">{o.qty}</td>
+                  <td className="table-cell font-medium text-white">{o.symbol ?? '—'}</td>
+                  <td className="table-cell"><span className={o.side === 'BUY' ? 'badge-green' : 'badge-red'}>{o.side ?? '—'}</span></td>
+                  <td className="table-cell text-gray-300">{o.orderType ?? '—'}</td>
+                  <td className="table-cell text-gray-300">{o.product ?? '—'}</td>
+                  <td className="table-cell text-right">{o.qty ?? '—'}</td>
                   <td className="table-cell text-right">{o.price ? formatCurrency(o.price) : 'MKT'}</td>
                   <td className="table-cell text-center">
                     <span className={o.status === 'COMPLETE' ? 'badge-green' : o.status === 'REJECTED' || o.status === 'CANCELLED' ? 'badge-red' : 'badge-yellow'}>
-                      {o.status}
+                      {o.status ?? '—'}
                     </span>
                   </td>
-                  <td className="table-cell text-center"><span className={o.mode === 'PAPER' ? 'badge-blue' : 'badge-red'}>{o.mode}</span></td>
+                  <td className="table-cell text-center"><span className={o.mode === 'PAPER' ? 'badge-blue' : 'badge-red'}>{o.mode ?? '—'}</span></td>
                   <td className="table-cell text-xs text-gray-500">{o.tag ?? '—'}</td>
-                  <td className="table-cell text-xs text-gray-400">{format(new Date(o.placedAt), 'dd MMM HH:mm')}</td>
+                  <td className="table-cell text-xs text-gray-400">{formatTime(o.placedAt, 'dd MMM HH:mm')}</td>
                 </tr>
               ))}
             </tbody>

@@ -56,14 +56,15 @@ interface QuoteData {
 
 export function TickerBar() {
   const [quotes, setQuotes] = useState<Record<string, QuoteData>>({});
+  const [timedOut, setTimedOut] = useState(false);
 
   const fetchQuotes = useCallback(async () => {
     try {
       const { data } = await marketApi.quotes(ALL_SYMBOLS.join(','));
       const result = (data as { data: Record<string, QuoteData> }).data;
       setQuotes((prev) => ({ ...prev, ...result }));
-    } catch {
-      /* ignore — keep showing last known values */
+    } catch (err) {
+      console.error('TickerBar: failed to fetch quotes', err);
     }
   }, []);
 
@@ -72,6 +73,11 @@ export function TickerBar() {
     const interval = setInterval(fetchQuotes, 5_000);
     return () => clearInterval(interval);
   }, [fetchQuotes]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setTimedOut(true), 10_000);
+    return () => clearTimeout(timer);
+  }, []);
 
   const onMessage = useCallback((msg: { type: string; payload: unknown }) => {
     if (msg.type !== 'QUOTE') return;
@@ -99,7 +105,7 @@ export function TickerBar() {
   if (items.length === 0) {
     return (
       <div className="fixed top-0 left-0 right-0 h-9 z-50 bg-gray-900 border-b border-gray-800 flex items-center px-5">
-        <span className="text-xs text-gray-500">Loading market data…</span>
+        <span className="text-xs text-gray-500">{timedOut ? 'Market Closed' : 'Loading market data…'}</span>
       </div>
     );
   }
