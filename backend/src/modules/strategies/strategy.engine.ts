@@ -28,6 +28,7 @@ const TIMEFRAME_CRON: Record<string, string> = {
 
 export class StrategyEngine {
   private jobs = new Map<string, cron.ScheduledTask>();
+  private configs = new Map<string, StrategyConfig & { isActive: boolean }>();
 
   private buildStrategy(cfg: StrategyConfig): BaseStrategy {
     const map: Record<StrategyType, new (c: StrategyConfig) => BaseStrategy> = {
@@ -172,6 +173,18 @@ export class StrategyEngine {
     );
 
     this.jobs.set(strategyId, job);
+    this.configs.set(strategyId, {
+      id: row.id,
+      name: row.name,
+      type: row.type,
+      symbol: row.symbol,
+      exchange: row.exchange,
+      timeframe: row.timeframe,
+      parameters: row.parameters as StrategyParams,
+      riskConfig: row.riskConfig as unknown as StrategyRiskConfig,
+      mode: row.mode as 'PAPER' | 'LIVE',
+      isActive: true,
+    });
     log.info('Strategy started', { name: row.name, cron: cronExpr });
   }
 
@@ -180,8 +193,19 @@ export class StrategyEngine {
     if (job) {
       job.stop();
       this.jobs.delete(strategyId);
+      this.configs.delete(strategyId);
       log.info('Strategy stopped', { strategyId });
     }
+  }
+
+  onPriceTick(symbol: string, price: number): void {
+    // Run strategies that have this symbol when live price arrives
+    void price;
+    Array.from(this.configs.values())
+      .filter((cfg) => cfg.symbol === symbol && cfg.isActive)
+      .forEach((cfg) => {
+        void this.runStrategy(cfg.id).catch(() => void 0);
+      });
   }
 
   async startAll(): Promise<void> {

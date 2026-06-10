@@ -152,8 +152,11 @@ export class UpstoxClient {
     instrumentKey: string,
     interval: string,
   ): Promise<unknown[][]> {
+    // Upstox intraday API only supports 1minute and 30minute
+    // For 5minute/15minute, fetch 1minute data and return raw - aggregation happens upstream
+    const supportedInterval = (interval === '5minute' || interval === '15minute') ? '1minute' : interval;
     const { data } = await this.http.get<{ data: { candles: unknown[][] } }>(
-      `/historical-candle/intraday/${encodeURIComponent(instrumentKey)}/${interval}`,
+      `/historical-candle/intraday/${encodeURIComponent(instrumentKey)}/${supportedInterval}`,
     );
     return data.data?.candles ?? [];
   }

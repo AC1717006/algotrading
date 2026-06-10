@@ -6,6 +6,7 @@ import { config } from '../../config';
 import { upstoxClient } from '../broker/upstox.client';
 import { paperEngine } from '../trading/paper-engine';
 import { marketDataService } from './market-data.service';
+import { strategyEngine } from '../strategies/strategy.engine';
 import { logger } from '../../utils/logger';
 import { JwtPayload, WsMessage } from '../../types';
 import { prisma } from '../../database/client';
@@ -165,6 +166,7 @@ export class WebSocketService {
               quotes[key] = ltp;
               marketDataService.setLtp(key, ltp);
               this.broadcastQuote(key, ltp);
+              strategyEngine.onPriceTick(key, ltp);
             }
           }
 
