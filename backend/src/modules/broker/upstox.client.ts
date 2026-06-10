@@ -179,7 +179,7 @@ export class UpstoxClient {
   async getMarketFeedUrl(): Promise<string> {
     const https = await import('https');
     return new Promise((resolve, reject) => {
-      const token = this.accessToken;
+      const token = this.getToken();
       const req = https.request(
         {
           hostname: 'api.upstox.com',
