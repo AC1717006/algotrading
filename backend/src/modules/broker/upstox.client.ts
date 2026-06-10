@@ -148,6 +148,16 @@ export class UpstoxClient {
     return data.data?.candles ?? [];
   }
 
+  async getIntradayCandles(
+    instrumentKey: string,
+    interval: string,
+  ): Promise<unknown[][]> {
+    const { data } = await this.http.get<{ data: { candles: unknown[][] } }>(
+      `/historical-candle/intraday/${encodeURIComponent(instrumentKey)}/${interval}`,
+    );
+    return data.data?.candles ?? [];
+  }
+
   async getQuotes(instrumentKeys: string[]): Promise<Record<string, unknown>> {
     const { data } = await this.http.get<{ data: Record<string, unknown> }>(
       `/market-quote/quotes?instrument_key=${instrumentKeys.join(',')}`,

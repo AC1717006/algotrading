@@ -66,7 +66,9 @@ export class StrategyEngine {
 
     let candles: Candle[] = [];
     try {
-      const raw = await upstoxClient.getHistoricalCandles(cfg.symbol, cfg.timeframe, today, yesterday);
+      const raw = cfg.timeframe.includes('minute')
+        ? await upstoxClient.getIntradayCandles(cfg.symbol, cfg.timeframe)
+        : await upstoxClient.getHistoricalCandles(cfg.symbol, cfg.timeframe, today, yesterday);
       candles = raw
         .map((c) => ({
           timestamp: new Date(c[0] as string).getTime(),
