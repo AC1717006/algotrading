@@ -175,7 +175,7 @@ export class UpstoxClient {
   // ─── Live Market Feed authorization ──────────────────────────────────────────
   async getMarketFeedUrl(): Promise<string> {
     const { data } = await this.http.get<{ data: { authorized_redirect_uri: string } }>(
-      '/feed/market-data-feed/authorize',
+      '/feed/market-data-streamer/v2/authorize',
     );
     return data.data.authorized_redirect_uri;
   }
