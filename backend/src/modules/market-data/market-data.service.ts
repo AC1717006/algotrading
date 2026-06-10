@@ -16,6 +16,11 @@ const TOP_MOVERS_WATCHLIST = [
   'NSE_EQ|INE585B01010', // Maruti
   'NSE_EQ|INE029A01011', // ITC
   'NSE_EQ|INE117A01022', // Wipro
+  'MCX_FO|430069',   // Gold
+  'MCX_FO|429117',   // Silver
+  'MCX_FO|431196',   // Crude Oil
+  'MCX_FO|430597',   // Natural Gas
+  'MCX_FO|430135',   // Copper
 ];
 
 interface RawQuote {
