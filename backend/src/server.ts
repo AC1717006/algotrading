@@ -47,6 +47,8 @@ async function bootstrap(): Promise<void> {
     const symbols = [...new Set(
       activeStrategies.flatMap((s) => [s.symbol, ...(s.watchedSymbols ?? [])]).filter(Boolean),
     )] as string[];
+    const { brokerService } = await import('./modules/broker/broker.service');
+    await brokerService.loadTokenFromDb();
     if (symbols.length) {
       await wsService.connectUpstoxFeed(symbols);
       log.info('Upstox market feed connected', { symbols });
