@@ -8,9 +8,9 @@ const INDICES = [
   { key: 'NSE_INDEX|Nifty 50', label: 'NIFTY 50' },
   { key: 'NSE_INDEX|Nifty Bank', label: 'BANK NIFTY' },
   { key: 'BSE_INDEX|SENSEX', label: 'SENSEX' },
-  { key: 'MCX_FO|430069', label: 'GOLD' },
-  { key: 'MCX_FO|429117', label: 'SILVER' },
-  { key: 'MCX_FO|431196', label: 'CRUDE OIL' },
+  { key: 'MCX_FO|466583', label: 'GOLD' },
+  { key: 'MCX_FO|464150', label: 'SILVER' },
+  { key: 'MCX_FO|499095', label: 'CRUDE OIL' },
 ];
 
 const WATCHLIST = [
@@ -40,9 +40,9 @@ const SYMBOL_LABELS: Record<string, string> = {
   'NSE_INDEX|Nifty 50': 'NIFTY 50',
   'NSE_INDEX|Nifty Bank': 'BANK NIFTY',
   'BSE_INDEX|SENSEX': 'SENSEX',
-  'MCX_FO|430069': 'GOLD',
-  'MCX_FO|429117': 'SILVER',
-  'MCX_FO|431196': 'CRUDE OIL',
+  'MCX_FO|466583': 'GOLD',
+  'MCX_FO|464150': 'SILVER',
+  'MCX_FO|499095': 'CRUDE OIL',
 };
 
 const ALL_SYMBOLS = [...INDICES.map((i) => i.key), ...WATCHLIST];
