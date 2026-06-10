@@ -4,6 +4,11 @@ const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api';
 
 export const api = axios.create({ baseURL: BASE_URL, timeout: 15_000 });
 
+export const publicApi = axios.create({
+  baseURL: process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api',
+  timeout: 10_000,
+});
+
 api.interceptors.request.use((cfg) => {
   if (typeof window !== 'undefined') {
     const token = localStorage.getItem('access_token');
@@ -76,9 +81,9 @@ export const brokerApi = {
 
 export const marketApi = {
   candles: (params: Record<string, string>) => api.get('/market/candles', { params }),
-  quotes: (symbols: string) => api.get('/market/quotes', { params: { symbols } }),
+  quotes: (symbols: string) => publicApi.get('/market/quotes', { params: { symbols } }),
   ltp: (symbol?: string) => api.get('/market/ltp', { params: symbol ? { symbol } : {} }),
-  topMovers: () => api.get('/market/top-movers'),
+  topMovers: () => publicApi.get('/market/top-movers'),
 };
 
 export const s3Api = {
