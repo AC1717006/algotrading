@@ -174,13 +174,31 @@ export class UpstoxClient {
 
   // ─── Live Market Feed authorization ──────────────────────────────────────────
   async getMarketFeedUrl(): Promise<string> {
-    const { data } = await this.http.get<{ data: { authorized_redirect_uri: string } }>(
-      '/feed/market-data-feed',
-      {
-        baseURL: 'https://api.upstox.com/v3',
-      }
-    );
-    return data.data.authorized_redirect_uri;
+    const https = await import('https');
+    return new Promise((resolve, reject) => {
+      const token = this.accessToken;
+      const req = https.request(
+        {
+          hostname: 'api.upstox.com',
+          path: '/v3/feed/market-data-feed',
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Api-Version': '2.0',
+            'Accept': 'application/json',
+          },
+        },
+        (res) => {
+          if (res.statusCode === 307 || res.statusCode === 302 || res.statusCode === 301) {
+            resolve(res.headers.location!);
+          } else {
+            reject(new Error(`Unexpected status: ${res.statusCode}`));
+          }
+        },
+      );
+      req.on('error', reject);
+      req.end();
+    });
   }
 }
 
