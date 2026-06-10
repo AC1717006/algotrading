@@ -19,9 +19,12 @@ export class UpstoxClient {
     });
 
     this.http.interceptors.request.use((cfg) => {
-      cfg.headers['Authorization'] = `Bearer ${this.accessToken}`;
-      cfg.headers['Accept'] = 'application/json';
+      const token = this.getToken();
+      if (token) {
+        cfg.headers['Authorization'] = `Bearer ${token}`;
+      }
       cfg.headers['Api-Version'] = '2.0';
+      cfg.headers['Accept'] = 'application/json';
       return cfg;
     });
 
