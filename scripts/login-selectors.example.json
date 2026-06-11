@@ -1,0 +1,9 @@
+{
+  "_comment": "Copy this file to login-selectors.json and fill in real values discovered via inspect-upstox-login.js. Do not commit login-selectors.json if it ever contains anything sensitive (it shouldn't, but keep it server-side).",
+  "mobileInput": "#mobileNum",
+  "mobileSubmit": "#getOtp",
+  "totpInput": "#otpNum",
+  "totpSubmit": "#continueBtn",
+  "pinInput": "#pinCode",
+  "pinSubmit": "#pinContinueBtn"
+}

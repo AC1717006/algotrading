@@ -12,6 +12,11 @@
  *   8. Notify success/failure via Telegram
  *
  * Run via cron — see setup-cron.sh.
+ *
+ * Login page selectors (mobileInput/mobileSubmit/totpInput/totpSubmit/
+ * pinInput/pinSubmit) are loaded from login-selectors.json, discovered via
+ * inspect-upstox-login.js. Run that tool first if login-selectors.json
+ * doesn't exist yet or login starts failing after an Upstox UI change.
  */
 
 require('dotenv').config({ path: '/home/ubuntu/algotrading/backend/.env' });
@@ -51,6 +56,23 @@ const REQUIRED_ENV = [
 
 const SCREENSHOT_DIR = '/home/ubuntu/logs';
 const NAV_TIMEOUT_MS = 45_000;
+const SELECTORS_PATH = path.join(__dirname, 'login-selectors.json');
+const REQUIRED_SELECTORS = ['mobileInput', 'mobileSubmit', 'totpInput', 'totpSubmit', 'pinInput', 'pinSubmit'];
+
+function loadSelectors() {
+  if (!fs.existsSync(SELECTORS_PATH)) {
+    throw new Error(
+      `Missing ${SELECTORS_PATH}. Run inspect-upstox-login.js to discover the login page selectors first ` +
+      `(see login-selectors.example.json for the expected format).`,
+    );
+  }
+  const selectors = JSON.parse(fs.readFileSync(SELECTORS_PATH, 'utf8'));
+  const missing = REQUIRED_SELECTORS.filter((k) => !selectors[k]);
+  if (missing.length) {
+    throw new Error(`login-selectors.json is missing: ${missing.join(', ')}`);
+  }
+  return selectors;
+}
 
 // ─── Telegram ────────────────────────────────────────────────────────────────
 async function sendTelegram(message) {
@@ -82,6 +104,8 @@ async function saveDebugScreenshot(page, label) {
 
 // ─── Browser login → authorization code ─────────────────────────────────────
 async function getAuthorizationCode() {
+  const selectors = loadSelectors();
+
   const browser = await puppeteer.launch({
     headless: 'new',
     args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
@@ -101,26 +125,20 @@ async function getAuthorizationCode() {
     await page.goto(authUrl, { waitUntil: 'networkidle2' });
 
     // ── Step 1: Mobile number ────────────────────────────────────────────────
-    // VERIFY: selector for the mobile number input on login.upstox.com
-    await page.waitForSelector('#mobileNum', { visible: true });
-    await page.type('#mobileNum', UPSTOX_MOBILE, { delay: 60 });
-    // VERIFY: "Get OTP" / continue button selector
-    await page.click('#getOtp');
+    await page.waitForSelector(selectors.mobileInput, { visible: true });
+    await page.type(selectors.mobileInput, UPSTOX_MOBILE, { delay: 60 });
+    await page.click(selectors.mobileSubmit);
 
     // ── Step 2: TOTP (2FA) ───────────────────────────────────────────────────
-    // VERIFY: selector for the OTP/TOTP input field
-    await page.waitForSelector('#otpNum', { visible: true });
+    await page.waitForSelector(selectors.totpInput, { visible: true });
     const totp = authenticator.generate(UPSTOX_TOTP_SECRET);
-    await page.type('#otpNum', totp, { delay: 60 });
-    // VERIFY: continue button selector after entering TOTP
-    await page.click('#continueBtn');
+    await page.type(selectors.totpInput, totp, { delay: 60 });
+    await page.click(selectors.totpSubmit);
 
     // ── Step 3: PIN / Password ───────────────────────────────────────────────
-    // VERIFY: selector for the PIN/password input field
-    await page.waitForSelector('#pinCode', { visible: true });
-    await page.type('#pinCode', UPSTOX_PASSWORD, { delay: 60 });
-    // VERIFY: final "Continue"/"Login" button selector
-    await page.click('#pinContinueBtn');
+    await page.waitForSelector(selectors.pinInput, { visible: true });
+    await page.type(selectors.pinInput, UPSTOX_PASSWORD, { delay: 60 });
+    await page.click(selectors.pinSubmit);
 
     // ── Step 4: Wait for redirect back to redirect_uri with ?code=... ───────
     await page.waitForFunction(
