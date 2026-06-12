@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, useCallback } from 'react';
 import { tradingApi } from '@/lib/api';
 import { StatCard } from '@/components/StatCard';
+import { Watchlist } from '@/components/Watchlist';
 import { useWebSocket } from '@/hooks/useWebSocket';
 
 function formatCurrency(n: number) {
@@ -13,6 +14,7 @@ function formatCurrency(n: number) {
 export default function DashboardPage() {
   const qc = useQueryClient();
   const [liveQuotes, setLiveQuotes] = useState<Record<string, number>>({});
+  const [selectedSymbol, setSelectedSymbol] = useState<string | undefined>(undefined);
 
   const { data: summary } = useQuery({
     queryKey: ['trading-summary'],
@@ -86,6 +88,9 @@ export default function DashboardPage() {
           subtext="Active positions"
         />
       </div>
+
+      {/* Watchlist */}
+      <Watchlist selectedSymbol={selectedSymbol} onSelectSymbol={setSelectedSymbol} />
 
       {/* Open Orders */}
       <div className="card">
