@@ -4,6 +4,7 @@ import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { Sidebar } from '@/components/Sidebar';
 import { TickerBar } from '@/components/TickerBar';
+import { Header } from '@/components/Header';
 import { useAuthStore } from '@/store/auth.store';
 import { authApi } from '@/lib/api';
 import { isAuthenticated } from '@/lib/auth';
@@ -29,7 +30,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     <div className="flex h-screen overflow-hidden bg-gray-950 pt-9">
       <TickerBar />
       <Sidebar />
-      <main className="flex-1 ml-60 overflow-y-auto">
+      <main className="flex-1 ml-[200px] overflow-y-auto">
+        <Header />
         <div className="max-w-7xl mx-auto px-6 py-6">{children}</div>
       </main>
     </div>

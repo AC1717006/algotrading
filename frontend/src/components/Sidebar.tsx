@@ -18,7 +18,7 @@ export function Sidebar() {
   const { user, logout } = useAuthStore();
 
   return (
-    <aside className="w-60 bg-gray-900 border-r border-gray-800 flex flex-col h-[calc(100vh-2.25rem)] fixed left-0 top-9">
+    <aside className="w-[200px] bg-gray-900 border-r border-gray-800 flex flex-col h-[calc(100vh-2.25rem)] fixed left-0 top-9">
       {/* Logo */}
       <div className="flex items-center gap-3 px-5 py-4 border-b border-gray-800">
         <div className="w-8 h-8 bg-brand-600 rounded-lg flex items-center justify-center flex-shrink-0">
@@ -31,36 +31,43 @@ export function Sidebar() {
 
       {/* Nav */}
       <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
-        {navItems.map((item) => (
-          <Link
-            key={item.href}
-            href={item.href}
-            className={clsx(
-              'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors',
-              pathname === item.href
-                ? 'bg-brand-600 text-white'
-                : 'text-gray-400 hover:bg-gray-800 hover:text-white',
-            )}
-          >
-            <svg className="w-4.5 h-4.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d={item.icon} />
-            </svg>
-            {item.label}
-          </Link>
-        ))}
+        {navItems.map((item) => {
+          const active = pathname === item.href;
+          return (
+            <Link
+              key={item.href}
+              href={item.href}
+              className={clsx(
+                'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors border-l-2',
+                active
+                  ? 'border-[#3B82F6] bg-gray-800 text-white'
+                  : 'border-transparent text-gray-400 hover:bg-gray-800 hover:text-white',
+              )}
+            >
+              <svg className="w-4.5 h-4.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d={item.icon} />
+              </svg>
+              {item.label}
+            </Link>
+          );
+        })}
       </nav>
 
       {/* User */}
       <div className="px-3 py-4 border-t border-gray-800">
         <div className="flex items-center gap-3 px-3 py-2 rounded-lg">
-          <div className="w-7 h-7 bg-gray-700 rounded-full flex items-center justify-center text-xs font-bold text-gray-300">
+          <div className="w-7 h-7 bg-gray-700 rounded-full flex items-center justify-center text-xs font-bold text-gray-300 flex-shrink-0">
             {user?.email?.[0]?.toUpperCase()}
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-xs text-white font-medium truncate">{user?.email}</p>
-            <p className="text-xs text-gray-500">{user?.role}</p>
+            {user?.role && (
+              <span className="inline-flex items-center mt-1 px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider bg-blue-900 text-blue-300">
+                {user.role}
+              </span>
+            )}
           </div>
-          <button onClick={logout} className="text-gray-500 hover:text-red-400 transition-colors" title="Logout">
+          <button onClick={logout} className="text-gray-500 hover:text-red-400 transition-colors flex-shrink-0" title="Logout">
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
             </svg>
