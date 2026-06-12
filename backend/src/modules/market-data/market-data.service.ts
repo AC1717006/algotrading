@@ -60,6 +60,68 @@ class MarketDataService {
     return candles;
   }
 
+  async getHistory(
+    symbol: string,
+    interval: string,
+    days: number,
+  ): Promise<{ symbol: string; interval: string; from: string; to: string; candles: Candle[]; total: number }> {
+    const to = new Date();
+    const from = new Date(to);
+    from.setDate(from.getDate() - days);
+
+    const toStr = to.toISOString().slice(0, 10);
+    const fromStr = from.toISOString().slice(0, 10);
+
+    const cacheKey = `history:${symbol}:${interval}:${days}:${toStr}`;
+    const cached = await cacheGet<{ symbol: string; interval: string; from: string; to: string; candles: Candle[]; total: number }>(cacheKey);
+    if (cached) return cached;
+
+    let raw: unknown[][] = [];
+
+    if (interval === '1minute' && days > 30) {
+      const chunkEnd = new Date(to);
+      while (chunkEnd > from) {
+        const chunkStart = new Date(chunkEnd);
+        chunkStart.setDate(chunkStart.getDate() - 30);
+        if (chunkStart < from) chunkStart.setTime(from.getTime());
+
+        const chunk = await upstoxClient.getHistoricalCandles(
+          symbol,
+          interval,
+          chunkEnd.toISOString().slice(0, 10),
+          chunkStart.toISOString().slice(0, 10),
+        );
+        raw = raw.concat(chunk);
+
+        chunkEnd.setTime(chunkStart.getTime());
+        chunkEnd.setDate(chunkEnd.getDate() - 1);
+      }
+    } else {
+      raw = await upstoxClient.getHistoricalCandles(symbol, interval, toStr, fromStr);
+    }
+
+    const seen = new Set<number>();
+    const candles: Candle[] = raw
+      .map((c) => ({
+        timestamp: new Date(c[0] as string).getTime(),
+        open: c[1] as number,
+        high: c[2] as number,
+        low: c[3] as number,
+        close: c[4] as number,
+        volume: c[5] as number,
+      }))
+      .filter((c) => {
+        if (seen.has(c.timestamp)) return false;
+        seen.add(c.timestamp);
+        return true;
+      })
+      .sort((a, b) => a.timestamp - b.timestamp);
+
+    const result = { symbol, interval, from: fromStr, to: toStr, candles, total: candles.length };
+    await cacheSet(cacheKey, result, 6 * 60 * 60); // Cache 6 hours
+    return result;
+  }
+
   async getQuotes(symbols: string[]): Promise<Record<string, Quote>> {
     const rawQuotes = await upstoxClient.getQuotes(symbols) as Record<string, RawQuote>;
     const result: Record<string, Quote> = {};

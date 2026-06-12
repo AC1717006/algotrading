@@ -42,6 +42,38 @@ router.get(
 
 /**
  * @swagger
+ * /market/history:
+ *   get:
+ *     tags: [Market Data]
+ *     summary: Get historical candles for the last N days (chunked + cached for 1minute interval)
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: query, name: symbol, required: true, schema: { type: string }, description: Upstox instrument key }
+ *       - { in: query, name: interval, required: false, schema: { type: string }, description: "1minute|5minute|15minute|1hour|day (default 1minute)" }
+ *       - { in: query, name: days, required: false, schema: { type: integer }, description: "Number of days of history (default 90, max 90)" }
+ */
+router.get(
+  '/history',
+  authenticate,
+  [
+    query('symbol').notEmpty(),
+    query('interval').optional().notEmpty(),
+    query('days').optional().isInt({ min: 1, max: 90 }),
+  ],
+  async (req: Request, res: Response): Promise<void> => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      res.status(400).json({ success: false, errors: errors.mapped() } as any);
+      return;
+    }
+    const { symbol, interval, days } = req.query as Record<string, string>;
+    const history = await marketDataService.getHistory(symbol, interval ?? '1minute', days ? parseInt(days, 10) : 90);
+    res.json(<ApiResponse>{ success: true, data: history });
+  },
+);
+
+/**
+ * @swagger
  * /market/quotes:
  *   get:
  *     tags: [Market Data]

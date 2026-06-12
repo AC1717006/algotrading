@@ -5,6 +5,7 @@ import { useState, useCallback } from 'react';
 import { tradingApi } from '@/lib/api';
 import { StatCard } from '@/components/StatCard';
 import { Watchlist } from '@/components/Watchlist';
+import { HistoricalChart } from '@/components/HistoricalChart';
 import { useWebSocket } from '@/hooks/useWebSocket';
 
 function formatCurrency(n: number) {
@@ -15,6 +16,7 @@ export default function DashboardPage() {
   const qc = useQueryClient();
   const [liveQuotes, setLiveQuotes] = useState<Record<string, number>>({});
   const [selectedSymbol, setSelectedSymbol] = useState<string | undefined>(undefined);
+  const [watchlistSymbols, setWatchlistSymbols] = useState<string[]>([]);
 
   const { data: summary } = useQuery({
     queryKey: ['trading-summary'],
@@ -90,7 +92,16 @@ export default function DashboardPage() {
       </div>
 
       {/* Watchlist */}
-      <Watchlist selectedSymbol={selectedSymbol} onSelectSymbol={setSelectedSymbol} />
+      <Watchlist
+        selectedSymbol={selectedSymbol}
+        onSelectSymbol={setSelectedSymbol}
+        onSymbolsChange={setWatchlistSymbols}
+      />
+
+      {/* Historical Chart */}
+      {watchlistSymbols.length > 0 && (
+        <HistoricalChart symbol={selectedSymbol} symbols={watchlistSymbols} onSymbolChange={setSelectedSymbol} />
+      )}
 
       {/* Open Orders */}
       <div className="card">

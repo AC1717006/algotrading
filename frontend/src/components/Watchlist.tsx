@@ -27,9 +27,10 @@ function formatNumber(symbol: string, value: number | undefined): string {
 interface WatchlistProps {
   selectedSymbol?: string;
   onSelectSymbol?: (symbol: string) => void;
+  onSymbolsChange?: (symbols: string[]) => void;
 }
 
-export function Watchlist({ selectedSymbol, onSelectSymbol }: WatchlistProps) {
+export function Watchlist({ selectedSymbol, onSelectSymbol, onSymbolsChange }: WatchlistProps) {
   const [symbols, setSymbols] = useState<string[]>(DEFAULT_WATCHLIST);
   const [quotes, setQuotes] = useState<Record<string, QuoteRow>>({});
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
@@ -53,7 +54,8 @@ export function Watchlist({ selectedSymbol, onSelectSymbol }: WatchlistProps) {
   // Persist symbols
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(symbols));
-  }, [symbols]);
+    onSymbolsChange?.(symbols);
+  }, [symbols, onSymbolsChange]);
 
   const fetchQuotes = useCallback(async () => {
     if (symbols.length === 0) return;

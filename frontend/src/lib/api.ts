@@ -81,6 +81,7 @@ export const brokerApi = {
 
 export const marketApi = {
   candles: (params: Record<string, string>) => api.get('/market/candles', { params }),
+  history: (params: { symbol: string; interval?: string; days?: number }) => api.get('/market/history', { params }),
   quotes: (symbols: string) => publicApi.get('/market/quotes', { params: { symbols } }),
   ltp: (symbol?: string) => api.get('/market/ltp', { params: symbol ? { symbol } : {} }),
   topMovers: () => publicApi.get('/market/top-movers'),
