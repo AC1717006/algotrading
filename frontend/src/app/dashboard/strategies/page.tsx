@@ -3,7 +3,8 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import toast from 'react-hot-toast';
-import { strategyApi, marketApi } from '@/lib/api';
+import { strategyApi } from '@/lib/api';
+import { SystemMetricsPanel } from '@/components/SystemMetricsPanel';
 
 interface Strategy {
   id: string;
@@ -19,12 +20,6 @@ interface Strategy {
   riskSettings: Record<string, unknown>;
 }
 
-interface MoverQuote {
-  symbol: string;
-  ltp: number;
-  changePercent: number;
-}
-
 export default function StrategiesPage() {
   const qc = useQueryClient();
   const [selected, setSelected] = useState<Strategy | null>(null);
@@ -33,12 +28,6 @@ export default function StrategiesPage() {
   const { data: strategies, isLoading } = useQuery({
     queryKey: ['strategies'],
     queryFn: () => strategyApi.list().then((r) => (r.data as { data: Strategy[] }).data),
-  });
-
-  const { data: topMovers } = useQuery({
-    queryKey: ['top-movers'],
-    queryFn: () => marketApi.topMovers().then((r) => (r.data as { data: { gainers: MoverQuote[]; losers: MoverQuote[] } }).data),
-    refetchInterval: 10_000,
   });
 
   const enableMutation = useMutation({
@@ -189,36 +178,7 @@ export default function StrategiesPage() {
         )}
       </div>
 
-      {/* Top Movers Watchlist */}
-      <div className="card">
-        <h2 className="text-sm font-semibold text-white mb-3">Top Movers</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <p className="text-xs text-gray-500 mb-2">Top Gainers</p>
-            <div className="space-y-1">
-              {topMovers?.gainers.length ? topMovers.gainers.map((q) => (
-                <div key={q.symbol} className="flex justify-between text-xs py-1">
-                  <span className="text-gray-300 font-mono truncate">{q.symbol}</span>
-                  <span className="text-white">{q.ltp.toFixed(2)}</span>
-                  <span className="text-success">+{q.changePercent.toFixed(2)}%</span>
-                </div>
-              )) : <p className="text-xs text-gray-600">No data</p>}
-            </div>
-          </div>
-          <div>
-            <p className="text-xs text-gray-500 mb-2">Top Losers</p>
-            <div className="space-y-1">
-              {topMovers?.losers.length ? topMovers.losers.map((q) => (
-                <div key={q.symbol} className="flex justify-between text-xs py-1">
-                  <span className="text-gray-300 font-mono truncate">{q.symbol}</span>
-                  <span className="text-white">{q.ltp.toFixed(2)}</span>
-                  <span className="text-danger">{q.changePercent.toFixed(2)}%</span>
-                </div>
-              )) : <p className="text-xs text-gray-600">No data</p>}
-            </div>
-          </div>
-        </div>
-      </div>
+      <SystemMetricsPanel />
     </div>
   );
 }

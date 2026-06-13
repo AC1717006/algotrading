@@ -241,3 +241,281 @@ After `npm run db:seed`:
 - Password: `ChangeMe@123`
 
 **Change immediately after first login.**
+# AlgoTrader — Aaj Ka Kaam Ka Summary
+**Date:** 12 June 2026  
+**Server:** ajayalgotrader.duckdns.org (EC2 Mumbai)  
+**Stack:** Next.js 14 + Node.js + TypeScript + PostgreSQL + Upstox API
+
+---
+
+## 🔧 Problem 1 — Upstox Token 401 Error (Fixed)
+**Problem:** Backend 401 error de raha tha — Upstox access token expire ho gaya tha  
+**Fix:** Token DB mein manually update kiya:
+```sql
+UPDATE settings SET value='<new_token>', updated_at=NOW() 
+WHERE key='upstox_access_token';
+```
+**Result:** Backend quotes 200 return karne laga ✅
+
+---
+
+## 🎨 Task 1 — Dashboard UI Redesign
+**Files Changed:**
+- `frontend/src/app/globals.css` — CSS variables + typography
+- `frontend/src/components/Sidebar.tsx` — Labels + active state + role badge
+- `frontend/src/app/dashboard/layout.tsx` — Layout update
+- `frontend/src/components/StatCard.tsx` — Icons + color coding
+- `frontend/src/components/Header.tsx` — **New file**
+
+**New Header Features:**
+- AlgoTrader v1.0 logo
+- Live IST clock (updates every second)
+- Market Open/Closed pill — Green 09:15–15:30 IST weekdays, Red otherwise
+- PAPER/LIVE mode toggle
+- Broker connection status dot
+
+**Sidebar Changes:**
+- Width: 80px → 200px
+- Labels: Overview, Strategies, Trade History, Logs
+- Active page: Blue left-border highlight
+- Role badge (ADMIN) at bottom
+
+**Stat Cards:**
+- Icons added (💰📈📊🔢)
+- Color coded borders
+- Indian number formatting (₹)
+
+---
+
+## 📊 Task 2 — Live Watchlist
+**File Created:** `frontend/src/components/Watchlist.tsx`
+
+**Features:**
+- 10 default symbols pre-loaded
+- Auto-refresh every 5 seconds via `/api/market/quotes`
+- "Market Closed — Showing LTP" badge when market is closed
+- Add symbol modal (search + manual instrument key)
+- Hover to remove symbol
+- localStorage persistence — survives page refresh
+- Row click → loads historical chart
+- Last updated timestamp shown
+
+**Default Symbols:**
+```
+NSE_INDEX|Nifty 50, NSE_INDEX|Nifty Bank, BSE_INDEX|SENSEX
+NSE_EQ|INE009A01021 (Reliance), NSE_EQ|INE040A01034 (TCS)
+NSE_EQ|INE062A01020 (Infosys), NSE_EQ|INE090A01021 (HDFC Bank)
+NSE_EQ|INE467B01029 (Asian Paints), MCX_FO|466583 (Gold)
+MCX_FO|464150 (Silver)
+```
+
+---
+
+## 📈 Task 3 — Historical Data
+### Backend — New API Endpoint
+**File:** `backend/src/modules/market-data/market-data.routes.ts`
+
+```
+GET /api/market/history?symbol=NSE_EQ|INE009A01021&interval=1minute&days=7
+```
+- Upstox historical candles API call
+- 30-day chunks merge (3 calls for 90 days)
+- Redis cache 6 hours TTL
+- Returns: `{ success, data: { symbol, interval, candles[], total } }`
+
+**Candle Format (Upstox):**
+```
+[timestamp_string, open, high, low, close, volume, oi]
+```
+
+### Frontend — Historical Chart
+**File Created:** `frontend/src/components/HistoricalChart.tsx`
+- `lightweight-charts` by TradingView (free)
+- Candlestick + Volume panes
+- Interval switching: 1m, 5m, 15m, 1h, 1d
+- Summary stats (Open, High, Low, Last, 3M Return)
+- CSV export button
+
+**Issue Pending:** React hydration error #418/#423 — `lightweight-charts` SSR issue  
+**Fix Needed:** Dynamic import with `ssr: false` in Next.js
+
+---
+
+## 🗄️ Task 4 — Historical Data Save to PostgreSQL
+
+### New Table Created
+```sql
+CREATE TABLE historical_candles (
+  id          BIGSERIAL PRIMARY KEY,
+  symbol      TEXT NOT NULL,
+  interval    TEXT NOT NULL,
+  ts          BIGINT NOT NULL,        -- Unix ms timestamp
+  open        DOUBLE PRECISION NOT NULL,
+  high        DOUBLE PRECISION NOT NULL,
+  low         DOUBLE PRECISION NOT NULL,
+  close       DOUBLE PRECISION NOT NULL,
+  volume      BIGINT NOT NULL,
+  created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(symbol, interval, ts)
+);
+```
+
+**Prisma Model Added** (`prisma/schema.prisma`):
+```prisma
+model HistoricalCandle {
+  id        BigInt   @id @default(autoincrement())
+  symbol    String
+  interval  String
+  ts        BigInt
+  open      Float
+  high      Float
+  low       Float
+  close     Float
+  volume    BigInt
+  createdAt DateTime @default(now()) @map("created_at")
+  @@unique([symbol, interval, ts])
+  @@map("historical_candles")
+}
+```
+
+### New Service File
+**File:** `backend/src/modules/market-data/candle-store.service.ts`
+
+**Functions:**
+- `saveCandles(symbol, interval, days)` — Upstox se fetch karke DB mein save
+- `saveAllWatchlistCandles(interval, days)` — 8 symbols ke liye bulk save
+- `getCandlesFromDB(symbol, interval, fromTs, toTs)` — DB se fetch
+- `getCandleStats()` — Per symbol stats
+
+### Daily Cron Job
+**Added in:** `backend/src/server.ts`  
+**Schedule:** Every weekday 3:45 PM IST (10:15 UTC)
+```typescript
+cron.default.schedule('15 10 * * 1-5', async () => {
+  await saveAllWatchlistCandles('1minute', 1);
+});
+```
+
+### Data Saved Today
+```
+Symbol               | Interval | Candles | From       | To
+NSE_EQ|INE009A01021  | 1minute  | 1875    | 2026-06-05 | 2026-06-11  (Reliance)
+NSE_EQ|INE040A01034  | 1minute  | 1875    | 2026-06-05 | 2026-06-11  (TCS)
+NSE_EQ|INE062A01020  | 1minute  | 1875    | 2026-06-05 | 2026-06-11  (Infosys)
+NSE_EQ|INE090A01021  | 1minute  | 1875    | 2026-06-05 | 2026-06-11  (HDFC Bank)
+NSE_EQ|INE467B01029  | 1minute  | 1875    | 2026-06-05 | 2026-06-11  (Asian Paints)
+NSE_EQ|INE585B01010  | 1minute  | 1875    | 2026-06-05 | 2026-06-11  (SBI)
+NSE_EQ|INE669C01036  | 1minute  | 1875    | 2026-06-05 | 2026-06-11  (ICICI Bank)
+TOTAL: 13,125 candles
+```
+
+---
+
+## 🐛 Issues Fixed During Day
+
+| Issue | Cause | Fix |
+|-------|-------|-----|
+| `git pull` fail | Local `package-lock.json` modified | `git stash && git pull` |
+| Frontend 502 Bad Gateway | `.next/standalone/server.js` path galat | `ecosystem.config.js` mein path fix |
+| `npm run build` Killed (code 137) | EC2 memory full | `sudo swapon /swapfile` — 1GB swap add |
+| React error #418/#423 | `lightweight-charts` SSR incompatible | Pending fix — dynamic import |
+| `permission denied for table` | Table `postgres` user ne banayi, `algouser` ko access nahi | `GRANT ALL PRIVILEGES ON TABLE historical_candles TO algouser` |
+| Candle save `0/1875` | Above permission issue | Fixed with GRANT |
+| `INE148A01014` 400 error | ITC instrument key invalid/expired | Remove from watchlist ya sahi key use karo |
+
+---
+
+## 📦 New Dependencies Added
+```
+Backend:  node-cron, @types/node-cron
+Frontend: lightweight-charts (v5)
+```
+
+---
+
+## 🔄 Deployment Steps Done
+```bash
+# Backend
+cd backend && npm install && npm run build
+pm2 restart algo-backend
+
+# Frontend  
+cd frontend && npm install && npm run build
+cp -r .next/static .next/standalone/frontend/.next/static
+pm2 restart algo-frontend
+
+pm2 save
+```
+
+---
+
+## ✅ Current System Status
+```
+Process         Status    Uptime   Memory
+algo-backend    online    ✅        ~80MB (2 cluster instances)
+algo-frontend   online    ✅        ~47MB
+```
+
+**GitHub:** https://github.com/AC1717006/algotrading (19+ commits)  
+**Live URL:** https://ajayalgotrader.duckdns.org/dashboard
+
+---
+
+## 📋 Kal Ke Liye Pending Tasks
+
+1. **Upstox Token Update** — Daily 6 AM se pehle token refresh karna hai
+   ```sql
+   UPDATE settings SET value='<new_token>', updated_at=NOW() 
+   WHERE key='upstox_access_token';
+   pm2 restart algo-backend
+   ```
+
+2. **Historical Chart Fix** — React hydration error
+   - `HistoricalChart.tsx` ko dynamic import karna hai `ssr: false` ke saath
+   - Dashboard page mein fix
+
+3. **ITC Symbol Fix** — `INE148A01014` 400 error
+   - Sahi instrument key dhundho Upstox portal pe
+
+4. **Watchlist Live Prices** — Kal market open hone par (9:15 AM) verify karo
+   - Prices `—` se actual numbers mein aane chahiye
+
+5. **Trade Analysis Feature** — Historical candles + trades ko join karke analysis dashboard banana
+
+6. **Auto Token Refresh** — Script already hai (`scripts/` folder mein)
+   - Cron job laga do daily token auto-refresh ke liye
+
+---
+
+## 💡 Architecture Summary
+
+```
+Browser
+  │
+  ├── Next.js Frontend (Port 3000)
+  │     ├── Dashboard Page
+  │     ├── Watchlist (polls every 5s)
+  │     └── HistoricalChart (lightweight-charts)
+  │
+  └── Nginx (Reverse Proxy + SSL)
+        │
+        ├── /api/* → Backend (Port 4000)
+        │     ├── Auth (JWT)
+        │     ├── Market Data (Upstox API)
+        │     ├── Historical Candles (DB + Redis cache)
+        │     ├── Trading Engine (Paper/Live)
+        │     ├── Strategy Engine (EMA, RSI, MACD)
+        │     └── WebSocket (Live feed)
+        │
+        └── /* → Frontend
+        
+Database: PostgreSQL
+  ├── users, orders, trades, positions
+  ├── strategies, signals
+  ├── settings (Upstox token yahan store hota hai)
+  ├── audit_logs, system_logs
+  └── historical_candles (NEW — 13,125 rows)
+
+Cache: Redis
+  └── Historical candle data (6h TTL)
+```

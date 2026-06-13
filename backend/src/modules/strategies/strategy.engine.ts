@@ -1,5 +1,5 @@
 import cron from 'node-cron';
-import { prisma } from '../../database/client';
+import { prisma, redis } from '../../database/client';
 import { upstoxClient } from '../broker/upstox.client';
 import { tradingService } from '../trading/trading.service';
 import { telegramService } from '../notifications/telegram.service';
@@ -17,6 +17,12 @@ const log = logger.child({ category: 'StrategyEngine' });
 type StrategyType = 'EMA_CROSSOVER' | 'RSI' | 'MACD' | 'BREAKOUT' | 'CUSTOM';
 
 const STRATEGY_CRON = '*/5 9-15 * * 1-5';
+const CRON_INTERVAL_MS = 5 * 60 * 1000;
+
+// Lock TTL is intentionally shorter than the cron interval so a crashed
+// instance can never permanently strand the lock and block future ticks.
+const LOCK_TTL_SECONDS = 270; // 4.5 minutes (< 5 minute cron interval)
+const LOCK_PREFIX = 'lock:strategy-run:';
 
 function aggregateCandles(candles: Candle[], groupSize: number): Candle[] {
   const result: Candle[] = [];
@@ -52,12 +58,42 @@ export class StrategyEngine {
     return new Cls(cfg);
   }
 
+  /**
+   * Distributed lock so that only one PM2 cluster instance executes a given
+   * strategy's evaluation within a given cron interval. The lock key is
+   * bucketed by the current 5-minute window, so it self-expires and never
+   * needs to be explicitly released — every instance racing for the same
+   * bucket will get a fresh key on the next tick.
+   */
+  private async acquireRunLock(strategyId: string): Promise<boolean> {
+    const bucket = Math.floor(Date.now() / CRON_INTERVAL_MS);
+    const key = `${LOCK_PREFIX}${strategyId}:${bucket}`;
+    try {
+      const result = await redis.set(key, `${process.pid}`, 'EX', LOCK_TTL_SECONDS, 'NX');
+      return result === 'OK';
+    } catch (err) {
+      // If Redis is unreachable, fail open on a single instance only by
+      // logging loudly — duplicate execution is preferable to no execution,
+      // but this should be alerted on immediately.
+      log.error('Redis lock acquisition failed — proceeding without lock', { strategyId, err });
+      return true;
+    }
+  }
+
   private async runStrategy(strategyId: string): Promise<void> {
     const masterSwitch = await prisma.setting.findUnique({ where: { key: 'strategies_enabled' } });
     if (masterSwitch?.value === 'false') return;
 
     const dbRow = await prisma.strategy.findUnique({ where: { id: strategyId } });
     if (!dbRow || !dbRow.isActive) return;
+
+    // Ensure this strategy only runs once per interval across all PM2 cluster
+    // instances (fixes double order placement under cluster mode).
+    const acquired = await this.acquireRunLock(strategyId);
+    if (!acquired) {
+      log.debug('Skipping strategy run — lock held by another instance', { strategyId, pid: process.pid });
+      return;
+    }
 
     const cfg: StrategyConfig = {
       id: dbRow.id,
@@ -207,7 +243,10 @@ export class StrategyEngine {
   }
 
   onPriceTick(symbol: string, price: number): void {
-    // Run strategies that have this symbol when live price arrives
+    // Run strategies that have this symbol when live price arrives.
+    // runStrategy() is itself guarded by the per-bucket distributed lock, so
+    // high-frequency ticks across many WebSocket connections/instances will
+    // still only trigger one evaluation per strategy per cron interval.
     void price;
     Array.from(this.configs.values())
       .filter((cfg) => cfg.symbol === symbol && cfg.isActive)

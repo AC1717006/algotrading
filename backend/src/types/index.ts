@@ -67,6 +67,26 @@ export interface UpstoxOrderResponse {
   status: string;
 }
 
+// ─── Upstox GTT (Good Till Triggered) bracket orders ─────────────────────────
+export interface UpstoxGttRule {
+  strategy: 'ENTRY' | 'TARGET' | 'STOPLOSS';
+  trigger_type: 'IMMEDIATE' | 'ABOVE' | 'BELOW';
+  trigger_price: number;
+}
+
+export interface UpstoxGttOrderPayload {
+  type: 'SINGLE' | 'OCO';
+  quantity: number;
+  product: string;
+  instrument_token: string;
+  transaction_type: 'BUY' | 'SELL';
+  rules: UpstoxGttRule[];
+}
+
+export interface UpstoxGttOrderResponse {
+  gtt_order_ids: string[];
+}
+
 // ─── Trading ─────────────────────────────────────────────────────────────────
 export type TradingMode = 'PAPER' | 'LIVE';
 export type OrderSide = 'BUY' | 'SELL';

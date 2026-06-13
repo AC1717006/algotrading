@@ -1,11 +1,35 @@
-import { prisma } from '../../database/client';
+import Redis from 'ioredis';
+import { prisma, redis } from '../../database/client';
 import { upstoxClient } from './upstox.client';
 import { s3Service } from '../s3/s3.service';
 import { logger } from '../../utils/logger';
 
 const log = logger.child({ category: 'BrokerService' });
 
+// Pub/sub channel used to hot-reload the Upstox access token across all PM2
+// cluster instances without a process restart (see saveToken/initTokenSync).
+const TOKEN_UPDATE_CHANNEL = 'broker:token-updated';
+
 export class BrokerService {
+  private subscriber: Redis | null = null;
+
+  /**
+   * Subscribes this instance to broker token updates so that when any other
+   * instance (or the token-refresh script via POST /broker/token) saves a
+   * new Upstox token, every instance's in-memory UpstoxClient is updated
+   * immediately — no PM2 restart required.
+   */
+  async initTokenSync(): Promise<void> {
+    this.subscriber = redis.duplicate();
+    await this.subscriber.subscribe(TOKEN_UPDATE_CHANNEL);
+    this.subscriber.on('message', (_channel: string, token: string) => {
+      if (!token) return;
+      upstoxClient.setToken(token);
+      log.info('Upstox access token hot-reloaded via pub/sub');
+    });
+    log.info('Subscribed to broker token update channel', { channel: TOKEN_UPDATE_CHANNEL });
+  }
+
   async validateToken(): Promise<boolean> {
     try {
       await upstoxClient.getProfile();
@@ -27,6 +51,11 @@ export class BrokerService {
       create: { key: 'upstox_access_token', value: token, description: 'Current Upstox access token' },
     });
     await prisma.setting.update({ where: { key: 'upstox_token_valid' }, data: { value: 'true' } }).catch(() => void 0);
+
+    // Notify all PM2 cluster instances to hot-reload the in-memory token.
+    await redis.publish(TOKEN_UPDATE_CHANNEL, token).catch((err) => {
+      log.warn('Failed to publish token update — other instances will pick it up from DB on next loadTokenFromDb', { err });
+    });
 
     // Backup to S3
     try {

@@ -84,7 +84,10 @@ export const marketApi = {
   history: (params: { symbol: string; interval?: string; days?: number }) => api.get('/market/history', { params }),
   quotes: (symbols: string) => publicApi.get('/market/quotes', { params: { symbols } }),
   ltp: (symbol?: string) => api.get('/market/ltp', { params: symbol ? { symbol } : {} }),
-  topMovers: () => publicApi.get('/market/top-movers'),
+};
+
+export const systemApi = {
+  metrics: () => api.get('/system/metrics'),
 };
 
 export const s3Api = {

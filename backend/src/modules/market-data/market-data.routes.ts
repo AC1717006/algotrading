@@ -100,19 +100,6 @@ router.get(
 
 /**
  * @swagger
- * /market/top-movers:
- *   get:
- *     tags: [Market Data]
- *     summary: Get top gainers and losers from a predefined liquid NSE watchlist
- *     security: [{ bearerAuth: [] }]
- */
-router.get('/top-movers', async (_req: Request, res: Response): Promise<void> => {
-  const movers = await marketDataService.getTopMovers();
-  res.json(<ApiResponse>{ success: true, data: movers });
-});
-
-/**
- * @swagger
  * /market/ltp:
  *   get:
  *     tags: [Market Data]

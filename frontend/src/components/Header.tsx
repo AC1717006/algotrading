@@ -41,7 +41,7 @@ export function Header() {
   const marketOpen = isMarketOpen(now);
 
   return (
-    <header className="sticky top-0 z-10 flex items-center justify-between px-6 py-3 bg-[var(--bg-primary)] border-b border-gray-800">
+    <header className="sticky top-0 z-10 flex items-center justify-between px-6 py-3 glass rounded-none border-x-0 border-t-0">
       {/* Left: logo + version */}
       <div className="flex items-center gap-2">
         <span className="font-bold text-white text-sm">AlgoTrader</span>
@@ -55,27 +55,21 @@ export function Header() {
 
       {/* Right: market status, mode toggle, broker dot */}
       <div className="flex items-center gap-3">
-        <span
-          className={
-            marketOpen
-              ? 'inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-900 text-green-300'
-              : 'inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-900 text-red-300'
-          }
-        >
+        <span className={marketOpen ? 'badge-green' : 'badge-red'}>
           {marketOpen ? 'Market Open' : 'Market Closed'}
         </span>
 
-        <div className="flex bg-gray-800 rounded-lg p-1">
+        <div className="flex bg-white/5 border border-[var(--border)] rounded-lg p-1">
           {(['PAPER', 'LIVE'] as const).map((m) => (
             <button
               key={m}
               onClick={() => modeMutation.mutate(m)}
               disabled={modeMutation.isPending}
-              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${
                 mode === m
                   ? m === 'LIVE'
-                    ? 'bg-red-600 text-white'
-                    : 'bg-brand-600 text-white'
+                    ? 'bg-red-600 text-white shadow-[0_0_16px_-2px_var(--glow-red)]'
+                    : 'bg-brand-600 text-white shadow-[0_0_16px_-2px_var(--glow-blue)]'
                   : 'text-gray-400 hover:text-white'
               }`}
             >
@@ -86,7 +80,11 @@ export function Header() {
 
         <div className="flex items-center gap-1.5 text-xs text-[var(--text-secondary)]" title={brokerStatus?.valid ? 'Broker Connected' : 'Broker Disconnected'}>
           <span
-            className={`w-2 h-2 rounded-full ${brokerStatus?.valid ? 'bg-green-500' : 'bg-red-500'}`}
+            className={`w-2 h-2 rounded-full ${
+              brokerStatus?.valid
+                ? 'bg-green-500 shadow-[0_0_8px_2px_var(--glow-green)]'
+                : 'bg-red-500 shadow-[0_0_8px_2px_var(--glow-red)]'
+            }`}
           />
           Broker
         </div>

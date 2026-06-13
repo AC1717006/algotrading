@@ -66,7 +66,9 @@ model Strategy {
   createdAt   DateTime     @default(now()) @map("created_at")
   updatedAt   DateTime     @updatedAt @map("updated_at")
 
-  signals Signal[]
+  signals   Signal[]
+  orders    Order[]
+  positions Position[]
 
   @@map("strategies")
 }
@@ -101,20 +103,23 @@ model Order {
   mode          TradingMode
   brokerOrderId String?     @unique @map("broker_order_id")
   strategyId    String?     @map("strategy_id")
+  gttOrderIds   Json?       @map("gtt_order_ids")
   tag           String?
   rejectReason  String?     @map("reject_reason")
   placedAt      DateTime    @default(now()) @map("placed_at")
   filledAt      DateTime?   @map("filled_at")
   updatedAt     DateTime    @updatedAt @map("updated_at")
 
-  user   User    @relation(fields: [userId], references: [id])
-  trades Trade[]
+  user     User      @relation(fields: [userId], references: [id])
+  strategy Strategy? @relation(fields: [strategyId], references: [id], onDelete: SetNull)
+  trades   Trade[]
 
   @@index([userId])
   @@index([symbol])
   @@index([status])
   @@index([mode])
   @@index([placedAt])
+  @@index([strategyId])
   @@map("orders")
 }
 
@@ -187,9 +192,12 @@ model Position {
   closedAt       DateTime?   @map("closed_at")
   updatedAt      DateTime    @updatedAt @map("updated_at")
 
+  strategy Strategy? @relation(fields: [strategyId], references: [id], onDelete: SetNull)
+
   @@unique([symbol, mode, isOpen], name: "symbol_mode_open")
   @@index([isOpen])
   @@index([mode])
+  @@index([strategyId])
   @@map("positions")
 }
 

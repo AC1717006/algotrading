@@ -7,9 +7,11 @@
  *   3. Complete 2FA using a TOTP generated from UPSTOX_TOTP_SECRET
  *   4. Capture the `code` from the redirect_uri
  *   5. Exchange the code for an access_token via Upstox's token API
- *   6. Persist the token into the `settings` table (key = 'upstox_access_token')
- *   7. Restart the `algo-backend` PM2 process so it picks up the new token
- *   8. Notify success/failure via Telegram
+ *   6. Log in to the AlgoTrader API as the admin user and call
+ *      POST /api/broker/token with the new access token — this persists
+ *      the token, writes an AuditLog entry, and hot-reloads every PM2
+ *      cluster instance via Redis pub/sub (no restart required).
+ *   7. Notify success/failure via Telegram.
  *
  * Run via cron — see setup-cron.sh.
  *
@@ -23,13 +25,9 @@ require('dotenv').config({ path: '/home/ubuntu/algotrading/backend/.env' });
 
 const path = require('path');
 const fs = require('fs');
-const { exec } = require('child_process');
-const util = require('util');
-const execAsync = util.promisify(exec);
 
 const puppeteer = require('puppeteer');
 const { authenticator } = require('otplib');
-const { Client } = require('pg');
 const axios = require('axios');
 
 const {
@@ -39,10 +37,14 @@ const {
   UPSTOX_API_KEY,
   UPSTOX_API_SECRET,
   UPSTOX_REDIRECT_URI,
-  DATABASE_URL,
   TELEGRAM_BOT_TOKEN,
   TELEGRAM_CHAT_ID,
+  ADMIN_EMAIL,
+  ADMIN_PASSWORD,
+  BACKEND_API_URL,
 } = process.env;
+
+const API_BASE_URL = BACKEND_API_URL || 'http://localhost:4000/api';
 
 const REQUIRED_ENV = [
   'UPSTOX_MOBILE',
@@ -51,7 +53,8 @@ const REQUIRED_ENV = [
   'UPSTOX_API_KEY',
   'UPSTOX_API_SECRET',
   'UPSTOX_REDIRECT_URI',
-  'DATABASE_URL',
+  'ADMIN_EMAIL',
+  'ADMIN_PASSWORD',
 ];
 
 const SCREENSHOT_DIR = '/home/ubuntu/logs';
@@ -181,30 +184,26 @@ async function exchangeCodeForToken(code) {
   return data.access_token;
 }
 
-// ─── Persist token to PostgreSQL ─────────────────────────────────────────────
-async function saveTokenToDb(token) {
-  const client = new Client({ connectionString: DATABASE_URL });
-  await client.connect();
-  try {
-    const result = await client.query(
-      `UPDATE settings SET value = $1, updated_at = now() WHERE key = 'upstox_access_token'`,
-      [token],
-    );
-    if (result.rowCount === 0) {
-      // Row doesn't exist yet — create it.
-      await client.query(
-        `INSERT INTO settings (id, key, value, description) VALUES (gen_random_uuid(), 'upstox_access_token', $1, 'Upstox API access token')`,
-        [token],
-      );
-    }
-  } finally {
-    await client.end();
+// ─── AlgoTrader API: log in as admin, then push the new token ────────────────
+async function loginAsAdmin() {
+  const { data } = await axios.post(`${API_BASE_URL}/auth/login`, {
+    email: ADMIN_EMAIL,
+    password: ADMIN_PASSWORD,
+  });
+  if (!data?.data?.accessToken) {
+    throw new Error('AlgoTrader login did not return an accessToken');
   }
+  return data.data.accessToken;
 }
 
-// ─── Restart backend via PM2 ─────────────────────────────────────────────────
-async function restartBackend() {
-  await execAsync('pm2 restart algo-backend');
+async function pushTokenToBackend(upstoxAccessToken) {
+  const adminAccessToken = await loginAsAdmin();
+
+  await axios.post(
+    `${API_BASE_URL}/broker/token`,
+    { accessToken: upstoxAccessToken },
+    { headers: { Authorization: `Bearer ${adminAccessToken}` } },
+  );
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
@@ -216,11 +215,10 @@ async function main() {
 
   const code = await getAuthorizationCode();
   const token = await exchangeCodeForToken(code);
-  await saveTokenToDb(token);
-  await restartBackend();
+  await pushTokenToBackend(token);
 
   const time = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
-  await sendTelegram(`✅ Upstox token refreshed successfully at ${time}`);
+  await sendTelegram(`✅ Upstox token refreshed successfully at ${time} (hot-reloaded, no restart needed)`);
 }
 
 main().catch(async (err) => {

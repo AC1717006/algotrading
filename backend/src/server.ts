@@ -49,6 +49,7 @@ async function bootstrap(): Promise<void> {
     )] as string[];
     const { brokerService } = await import('./modules/broker/broker.service');
     await brokerService.loadTokenFromDb();
+    await brokerService.initTokenSync();
     if (symbols.length) {
       await wsService.connectUpstoxFeed(symbols);
       log.info('Upstox market feed connected', { symbols });

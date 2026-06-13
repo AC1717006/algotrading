@@ -18,15 +18,15 @@ export function Sidebar() {
   const { user, logout } = useAuthStore();
 
   return (
-    <aside className="w-[200px] bg-gray-900 border-r border-gray-800 flex flex-col h-[calc(100vh-2.25rem)] fixed left-0 top-9">
+    <aside className="w-[200px] glass border-r border-l-0 rounded-none flex flex-col h-[calc(100vh-2.25rem)] fixed left-0 top-9 p-0">
       {/* Logo */}
-      <div className="flex items-center gap-3 px-5 py-4 border-b border-gray-800">
-        <div className="w-8 h-8 bg-brand-600 rounded-lg flex items-center justify-center flex-shrink-0">
+      <div className="flex items-center gap-3 px-5 py-4 border-b border-[var(--border)]">
+        <div className="w-8 h-8 bg-brand-600 rounded-lg flex items-center justify-center flex-shrink-0 shadow-[0_0_16px_-2px_var(--glow-blue)]">
           <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
           </svg>
         </div>
-        <span className="font-bold text-white text-sm">AlgoTrader</span>
+        <span className="font-bold text-white text-sm tracking-wide">AlgoTrader</span>
       </div>
 
       {/* Nav */}
@@ -40,8 +40,8 @@ export function Sidebar() {
               className={clsx(
                 'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors border-l-2',
                 active
-                  ? 'border-[#3B82F6] bg-gray-800 text-white'
-                  : 'border-transparent text-gray-400 hover:bg-gray-800 hover:text-white',
+                  ? 'border-[var(--accent-blue)] bg-white/5 text-white shadow-[inset_0_0_20px_-8px_var(--glow-blue)]'
+                  : 'border-transparent text-gray-400 hover:bg-white/5 hover:text-white',
               )}
             >
               <svg className="w-4.5 h-4.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -54,15 +54,15 @@ export function Sidebar() {
       </nav>
 
       {/* User */}
-      <div className="px-3 py-4 border-t border-gray-800">
+      <div className="px-3 py-4 border-t border-[var(--border)]">
         <div className="flex items-center gap-3 px-3 py-2 rounded-lg">
-          <div className="w-7 h-7 bg-gray-700 rounded-full flex items-center justify-center text-xs font-bold text-gray-300 flex-shrink-0">
+          <div className="w-7 h-7 bg-white/5 border border-[var(--border)] rounded-full flex items-center justify-center text-xs font-bold text-gray-300 flex-shrink-0">
             {user?.email?.[0]?.toUpperCase()}
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-xs text-white font-medium truncate">{user?.email}</p>
             {user?.role && (
-              <span className="inline-flex items-center mt-1 px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider bg-blue-900 text-blue-300">
+              <span className="badge-blue mt-1 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider">
                 {user.role}
               </span>
             )}

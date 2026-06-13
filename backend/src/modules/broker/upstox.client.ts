@@ -1,14 +1,30 @@
 import axios, { AxiosInstance, AxiosError } from 'axios';
 import { config } from '../../config';
 import { logger } from '../../utils/logger';
-import { UpstoxOrderPayload, UpstoxOrderResponse } from '../../types';
+import { UpstoxOrderPayload, UpstoxOrderResponse, UpstoxGttOrderPayload, UpstoxGttOrderResponse } from '../../types';
 import { AppError } from '../../middleware/errorHandler';
 
 const log = logger.child({ category: 'UpstoxClient' });
 
+// Upstox enforces a rate limit of ~250 requests/minute per API key on most
+// endpoints — used to compute the "API limit usage" system metric.
+const RATE_LIMIT_PER_MINUTE = 250;
+const MAX_LATENCY_SAMPLES = 50;
+const RATE_WINDOW_MS = 60_000;
+
+export interface UpstoxApiMetrics {
+  avgLatencyMs: number;
+  sampleCount: number;
+  requestsLastMinute: number;
+  rateLimitPerMinute: number;
+  rateLimitUsagePct: number;
+}
+
 export class UpstoxClient {
   private http: AxiosInstance;
   private accessToken: string;
+  private latencySamples: number[] = [];
+  private requestTimestamps: number[] = [];
 
   constructor(initialToken = '') {
     this.accessToken = initialToken || config.UPSTOX_ACCESS_TOKEN;
@@ -25,18 +41,55 @@ export class UpstoxClient {
       }
       cfg.headers['Api-Version'] = '2.0';
       cfg.headers['Accept'] = 'application/json';
+      (cfg as { metadata?: { startTime: number } }).metadata = { startTime: Date.now() };
       return cfg;
     });
 
     this.http.interceptors.response.use(
-      (r) => r,
+      (r) => {
+        this.recordRequest(r.config as { metadata?: { startTime: number } });
+        return r;
+      },
       (err: AxiosError) => {
+        this.recordRequest(err.config as { metadata?: { startTime: number } } | undefined);
         if (err.response?.status === 401) {
           log.error('Upstox token invalid or expired');
         }
         return Promise.reject(err);
       },
     );
+  }
+
+  // ─── API call metrics (latency + rate-limit usage) ───────────────────────────
+  private recordRequest(cfg?: { metadata?: { startTime: number } }): void {
+    const startTime = cfg?.metadata?.startTime;
+    const now = Date.now();
+
+    if (startTime) {
+      this.latencySamples.push(now - startTime);
+      if (this.latencySamples.length > MAX_LATENCY_SAMPLES) {
+        this.latencySamples.shift();
+      }
+    }
+
+    this.requestTimestamps.push(now);
+    this.requestTimestamps = this.requestTimestamps.filter((t) => now - t <= RATE_WINDOW_MS);
+  }
+
+  getMetrics(): UpstoxApiMetrics {
+    const now = Date.now();
+    const requestsLastMinute = this.requestTimestamps.filter((t) => now - t <= RATE_WINDOW_MS).length;
+    const avgLatencyMs = this.latencySamples.length
+      ? Math.round(this.latencySamples.reduce((a, b) => a + b, 0) / this.latencySamples.length)
+      : 0;
+
+    return {
+      avgLatencyMs,
+      sampleCount: this.latencySamples.length,
+      requestsLastMinute,
+      rateLimitPerMinute: RATE_LIMIT_PER_MINUTE,
+      rateLimitUsagePct: Math.round((requestsLastMinute / RATE_LIMIT_PER_MINUTE) * 100),
+    };
   }
 
   setToken(token: string): void {
@@ -136,6 +189,36 @@ export class UpstoxClient {
   async getOrderHistory(): Promise<unknown[]> {
     const { data } = await this.http.get<{ data: unknown[] }>('/order/history');
     return data.data ?? [];
+  }
+
+  // ─── GTT (bracket) orders ─────────────────────────────────────────────────────
+  // Used by LiveTradingEngine to attach broker-side stop-loss/target protection
+  // to LIVE entries, so positions remain protected even if this process is down.
+  async placeGttOrder(payload: UpstoxGttOrderPayload): Promise<UpstoxGttOrderResponse> {
+    try {
+      const { data } = await this.http.post<{ data: UpstoxGttOrderResponse }>(
+        '/order/gtt/place',
+        payload,
+        { baseURL: 'https://api.upstox.com/v3' },
+      );
+      return data.data;
+    } catch (err) {
+      const ax = err as AxiosError<{ errors: Array<{ message: string }> }>;
+      const msg = ax.response?.data?.errors?.[0]?.message ?? 'Upstox GTT order placement failed';
+      throw new AppError(502, msg);
+    }
+  }
+
+  async cancelGttOrder(gttOrderId: string): Promise<void> {
+    try {
+      await this.http.delete('/order/gtt/cancel', {
+        baseURL: 'https://api.upstox.com/v3',
+        data: { gtt_order_id: gttOrderId },
+      });
+    } catch (err) {
+      const ax = err as AxiosError<{ errors: Array<{ message: string }> }>;
+      throw new AppError(502, ax.response?.data?.errors?.[0]?.message ?? 'GTT order cancellation failed');
+    }
   }
 
   // ─── Market Data ─────────────────────────────────────────────────────────────

@@ -3,7 +3,7 @@ import { upstoxClient } from '../broker/upstox.client';
 import { riskManager } from '../risk/risk-manager';
 import { telegramService } from '../notifications/telegram.service';
 import { AppError } from '../../middleware/errorHandler';
-import { PlaceOrderRequest } from '../../types';
+import { PlaceOrderRequest, UpstoxGttRule } from '../../types';
 import { logger } from '../../utils/logger';
 
 const log = logger.child({ category: 'LiveEngine' });
@@ -90,10 +90,64 @@ export class LiveTradingEngine {
     log.info('Live order placed', { brokerOrderId: upstoxResp.order_id, symbol: req.symbol });
     await telegramService.notify(`📤 Live ${req.side}: ${req.symbol} x${req.qty} @ ₹${req.price ?? currentPrice}`);
 
+    // Attach broker-side stop-loss/target protection so the position remains
+    // covered even if this process is down or the WS feed disconnects.
+    await this.placeBracketProtection(order.id, req);
+
     // Start polling for fill
     this.pollOrderStatus(order.id, upstoxResp.order_id, userId);
 
     return { orderId: order.id };
+  }
+
+  // ─── Bracket protection (GTT OCO: target + stop-loss) ─────────────────────────
+  private async placeBracketProtection(dbOrderId: string, req: PlaceOrderRequest): Promise<void> {
+    if (!req.stopLoss && !req.target) return;
+
+    // The GTT exit order closes the position, so it transacts on the
+    // opposite side of the entry.
+    const exitSide: 'BUY' | 'SELL' = req.side === 'BUY' ? 'SELL' : 'BUY';
+
+    const rules: UpstoxGttRule[] = [];
+    if (req.target) {
+      rules.push({
+        strategy: 'TARGET',
+        trigger_type: req.side === 'BUY' ? 'ABOVE' : 'BELOW',
+        trigger_price: req.target,
+      });
+    }
+    if (req.stopLoss) {
+      rules.push({
+        strategy: 'STOPLOSS',
+        trigger_type: req.side === 'BUY' ? 'BELOW' : 'ABOVE',
+        trigger_price: req.stopLoss,
+      });
+    }
+
+    try {
+      const gtt = await upstoxClient.placeGttOrder({
+        type: rules.length === 2 ? 'OCO' : 'SINGLE',
+        quantity: req.qty ?? 1,
+        product: req.product,
+        instrument_token: req.instrumentToken,
+        transaction_type: exitSide,
+        rules,
+      });
+
+      await prisma.order.update({
+        where: { id: dbOrderId },
+        data: { gttOrderIds: gtt.gtt_order_ids },
+      });
+
+      log.info('GTT bracket order placed', { dbOrderId, gttOrderIds: gtt.gtt_order_ids, rules });
+    } catch (err) {
+      log.error('Failed to place GTT bracket order — position is unprotected', { dbOrderId, err });
+      await telegramService.alert(
+        '⚠️ Unprotected LIVE position',
+        `Could not place stop-loss/target GTT for order ${dbOrderId} (${req.symbol}). ` +
+        `Reason: ${(err as Error).message}. Manual SL/target monitoring required.`,
+      );
+    }
   }
 
   // ─── Poll order fill ─────────────────────────────────────────────────────────
@@ -147,6 +201,9 @@ export class LiveTradingEngine {
 
         if (['CANCELLED', 'REJECTED'].includes(newStatus)) {
           log.warn('Live order terminal state', { brokerOrderId, status: newStatus });
+          // Entry never filled — cancel any GTT bracket placed against it so
+          // there's no dangling exit order for a position that doesn't exist.
+          await this.cancelBracketProtection(dbOrderId);
           return; // Stop polling
         }
 
@@ -167,6 +224,22 @@ export class LiveTradingEngine {
     if (!order.brokerOrderId) throw new AppError(400, 'No broker order ID found');
     await upstoxClient.cancelOrder(order.brokerOrderId);
     await prisma.order.update({ where: { id: dbOrderId }, data: { status: 'CANCELLED' } });
+    await this.cancelBracketProtection(dbOrderId);
+  }
+
+  private async cancelBracketProtection(dbOrderId: string): Promise<void> {
+    const order = await prisma.order.findUnique({ where: { id: dbOrderId } });
+    const gttOrderIds = (order?.gttOrderIds as string[] | null) ?? [];
+    if (!gttOrderIds.length) return;
+
+    for (const gttId of gttOrderIds) {
+      try {
+        await upstoxClient.cancelGttOrder(gttId);
+      } catch (err) {
+        log.error('Failed to cancel GTT order', { dbOrderId, gttId, err });
+      }
+    }
+    await prisma.order.update({ where: { id: dbOrderId }, data: { gttOrderIds: [] } });
   }
 
   // ─── Sync live positions ──────────────────────────────────────────────────────
