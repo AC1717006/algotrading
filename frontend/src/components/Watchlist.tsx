@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import clsx from 'clsx';
 import { marketApi } from '@/lib/api';
-import { DEFAULT_WATCHLIST, INSTRUMENT_DIRECTORY, isIndexSymbol, symbolLabel, getInstrumentKey } from '@/lib/instrument-mapping';
+import { DEFAULT_WATCHLIST, isIndexSymbol, symbolLabel, getInstrumentKey, useInstrumentDirectory } from '@/lib/instrument-mapping';
 import type { InstrumentInfo } from '@/lib/instrument-mapping';
 import { isMarketOpen, formatIstClock } from '@/lib/market';
 import { Modal } from '@/components/Modal';
@@ -59,6 +59,9 @@ export function Watchlist({ selectedSymbol, onSelectSymbol, onSymbolsChange }: W
     onSymbolsChange?.(symbols);
   }, [symbols, onSymbolsChange]);
 
+  // Resolve display labels for the current watchlist from the instrument registry
+  useInstrumentDirectory(symbols);
+
   const fetchQuotes = useCallback(async () => {
     if (symbols.length === 0) return;
     try {
@@ -110,18 +113,7 @@ export function Watchlist({ selectedSymbol, onSelectSymbol, onSymbolsChange }: W
     return () => clearTimeout(timer);
   }, [search]);
 
-  const localResults = search.trim()
-    ? INSTRUMENT_DIRECTORY.filter(
-        (i) =>
-          i.label.toLowerCase().includes(search.toLowerCase()) ||
-          i.key.toLowerCase().includes(search.toLowerCase()),
-      )
-    : [];
-
-  const searchResults = [
-    ...localResults,
-    ...apiResults.filter((i) => !localResults.some((l) => l.key === i.key)),
-  ];
+  const searchResults = apiResults;
 
   const marketOpen = isMarketOpen();
 

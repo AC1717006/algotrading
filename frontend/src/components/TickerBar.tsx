@@ -3,15 +3,15 @@
 import { useCallback, useEffect, useState } from 'react';
 import { marketApi } from '@/lib/api';
 import { useWebSocket } from '@/hooks/useWebSocket';
-import { symbolLabel } from '@/lib/instrument-mapping';
+import { symbolLabel, useInstrumentDirectory } from '@/lib/instrument-mapping';
 
 const INDICES = [
-  { key: 'NSE_INDEX|Nifty 50', label: 'NIFTY 50' },
-  { key: 'NSE_INDEX|Nifty Bank', label: 'BANK NIFTY' },
-  { key: 'BSE_INDEX|SENSEX', label: 'SENSEX' },
-  { key: 'MCX_FO|466583', label: 'GOLD' },
-  { key: 'MCX_FO|464150', label: 'SILVER' },
-  { key: 'MCX_FO|499095', label: 'CRUDE OIL' },
+  'NSE_INDEX|Nifty 50',
+  'NSE_INDEX|Nifty Bank',
+  'BSE_INDEX|SENSEX',
+  'MCX_FO|466583',
+  'MCX_FO|464150',
+  'MCX_FO|499095',
 ];
 
 const WATCHLIST = [
@@ -27,7 +27,7 @@ const WATCHLIST = [
   'NSE_EQ|INE075A01022', // Wipro
 ];
 
-const ALL_SYMBOLS = [...INDICES.map((i) => i.key), ...WATCHLIST];
+const ALL_SYMBOLS = [...INDICES, ...WATCHLIST];
 
 interface QuoteData {
   symbol: string;
@@ -74,8 +74,9 @@ export function TickerBar() {
   }, []);
 
   useWebSocket(onMessage, ALL_SYMBOLS);
+  useInstrumentDirectory(ALL_SYMBOLS);
 
-  const indices = INDICES.map((i) => quotes[i.key]).filter(Boolean) as QuoteData[];
+  const indices = INDICES.map((s) => quotes[s]).filter(Boolean) as QuoteData[];
   const stocks = WATCHLIST.map((s) => quotes[s]).filter(Boolean) as QuoteData[];
 
   const sorted = [...stocks].sort((a, b) => b.changePercent - a.changePercent);

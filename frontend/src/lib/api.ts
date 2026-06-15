@@ -84,7 +84,10 @@ export const marketApi = {
   history: (params: { symbol: string; interval?: string; days?: number }) => api.get('/market/history', { params }),
   quotes: (symbols: string) => publicApi.get('/market/quotes', { params: { symbols } }),
   ltp: (symbol?: string) => api.get('/market/ltp', { params: symbol ? { symbol } : {} }),
-  searchInstruments: (q: string) => api.get('/market/instruments/search', { params: { q } }),
+  searchInstruments: (q: string, exchanges?: string) => api.get('/market/instruments/search', { params: { q, exchanges } }),
+  resolveInstruments: (symbols: string) => api.get('/market/instruments/resolve', { params: { symbols } }),
+  optionChain: (underlying: string, expiry?: number) => api.get('/market/instruments/options', { params: { underlying, expiry } }),
+  futures: (underlying: string) => api.get('/market/instruments/futures', { params: { underlying } }),
 };
 
 export const systemApi = {

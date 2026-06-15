@@ -10,7 +10,7 @@ import {
   type UTCTimestamp,
 } from 'lightweight-charts';
 import { marketApi } from '@/lib/api';
-import { symbolLabel } from '@/lib/instrument-mapping';
+import { symbolLabel, useInstrumentDirectory } from '@/lib/instrument-mapping';
 
 interface Candle {
   timestamp: number;
@@ -67,6 +67,7 @@ interface HistoricalChartProps {
 }
 
 export function HistoricalChart({ symbol, symbols, onSymbolChange }: HistoricalChartProps) {
+  useInstrumentDirectory(symbols);
   const [rawCandles, setRawCandles] = useState<Candle[]>([]);
   const [dayCandles, setDayCandles] = useState<Candle[]>([]);
   const [interval, setInterval] = useState<IntervalKey>('5m');

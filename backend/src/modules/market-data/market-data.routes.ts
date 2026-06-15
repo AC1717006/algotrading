@@ -121,11 +121,12 @@ router.get('/ltp', authenticate, (req: Request, res: Response): void => {
  * /market/instruments/search:
  *   get:
  *     tags: [Market Data]
- *     summary: Search NSE MIS-eligible instruments by symbol or name
+ *     summary: Search instruments by symbol, name, instrument key or ISIN
  *     security: [{ bearerAuth: [] }]
  *     parameters:
- *       - { in: query, name: q, required: true, schema: { type: string }, description: Search text (symbol or name) }
+ *       - { in: query, name: q, required: true, schema: { type: string }, description: Search text }
  *       - { in: query, name: limit, required: false, schema: { type: integer }, description: "Max results (default 20)" }
+ *       - { in: query, name: exchanges, required: false, schema: { type: string }, description: "Comma-separated segment filter, e.g. NSE_EQ,BSE_EQ. Defaults to NSE_EQ." }
  */
 router.get(
   '/instruments/search',
@@ -137,9 +138,99 @@ router.get(
       res.status(400).json({ success: false, errors: errors.mapped() } as any);
       return;
     }
-    const { q, limit } = req.query as { q: string; limit?: string };
-    const results = instrumentService.searchNse(q, limit ? parseInt(limit, 10) : 20);
+    const { q, limit, exchanges } = req.query as { q: string; limit?: string; exchanges?: string };
+    const results = exchanges
+      ? instrumentService.search(q, limit ? parseInt(limit, 10) : 20, exchanges.split(',').map((e) => e.trim()).filter(Boolean))
+      : instrumentService.searchNse(q, limit ? parseInt(limit, 10) : 20);
     res.json(<ApiResponse>{ success: true, data: results });
+  },
+);
+
+/**
+ * @swagger
+ * /market/instruments/resolve:
+ *   get:
+ *     tags: [Market Data]
+ *     summary: Resolve an instrument key, canonical symbol (SEGMENT:SYMBOL), ISIN, or bare trading symbol
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: query, name: symbols, required: true, schema: { type: string }, description: Comma-separated identifiers to resolve }
+ */
+router.get(
+  '/instruments/resolve',
+  authenticate,
+  [query('symbols').notEmpty()],
+  (req: Request, res: Response): void => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      res.status(400).json({ success: false, errors: errors.mapped() } as any);
+      return;
+    }
+    const { symbols } = req.query as { symbols: string };
+    const result: Record<string, ReturnType<typeof instrumentService.resolve>> = {};
+    for (const s of symbols.split(',').map((s) => s.trim()).filter(Boolean)) {
+      result[s] = instrumentService.resolve(s);
+    }
+    res.json(<ApiResponse>{ success: true, data: result });
+  },
+);
+
+/**
+ * @swagger
+ * /market/instruments/options:
+ *   get:
+ *     tags: [Market Data]
+ *     summary: Get the option chain for an underlying (e.g. NIFTY, BANKNIFTY, FINNIFTY, or a stock symbol)
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: query, name: underlying, required: true, schema: { type: string } }
+ *       - { in: query, name: expiry, required: false, schema: { type: integer }, description: "Epoch ms; defaults to the nearest expiry" }
+ */
+router.get(
+  '/instruments/options',
+  authenticate,
+  [query('underlying').notEmpty()],
+  (req: Request, res: Response): void => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      res.status(400).json({ success: false, errors: errors.mapped() } as any);
+      return;
+    }
+    const { underlying, expiry } = req.query as { underlying: string; expiry?: string };
+    const chain = instrumentService.getOptionChain(underlying, expiry ? parseInt(expiry, 10) : undefined);
+    res.json(<ApiResponse>{ success: true, data: chain });
+  },
+);
+
+/**
+ * @swagger
+ * /market/instruments/futures:
+ *   get:
+ *     tags: [Market Data]
+ *     summary: Get futures contracts for an underlying (current + next month), e.g. NIFTY, BANKNIFTY, GOLD
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: query, name: underlying, required: true, schema: { type: string } }
+ */
+router.get(
+  '/instruments/futures',
+  authenticate,
+  [query('underlying').notEmpty()],
+  (req: Request, res: Response): void => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      res.status(400).json({ success: false, errors: errors.mapped() } as any);
+      return;
+    }
+    const { underlying } = req.query as { underlying: string };
+    res.json(<ApiResponse>{
+      success: true,
+      data: {
+        current: instrumentService.getCurrentFuture(underlying),
+        next: instrumentService.getNextFuture(underlying),
+        all: instrumentService.getFutureContracts(underlying),
+      },
+    });
   },
 );
 
