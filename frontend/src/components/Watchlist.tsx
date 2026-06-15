@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import clsx from 'clsx';
 import { marketApi } from '@/lib/api';
-import { DEFAULT_WATCHLIST, INSTRUMENT_DIRECTORY, isIndexSymbol, symbolLabel } from '@/lib/symbols';
+import { DEFAULT_WATCHLIST, INSTRUMENT_DIRECTORY, isIndexSymbol, symbolLabel, getInstrumentKey } from '@/lib/instrument-mapping';
+import type { InstrumentInfo } from '@/lib/instrument-mapping';
 import { isMarketOpen, formatIstClock } from '@/lib/market';
 import { Modal } from '@/components/Modal';
 
@@ -37,6 +38,7 @@ export function Watchlist({ selectedSymbol, onSelectSymbol, onSymbolsChange }: W
   const [modalOpen, setModalOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [manualKey, setManualKey] = useState('');
+  const [apiResults, setApiResults] = useState<InstrumentInfo[]>([]);
 
   // Load persisted symbols
   useEffect(() => {
@@ -82,19 +84,44 @@ export function Watchlist({ selectedSymbol, onSelectSymbol, onSymbolsChange }: W
   const addSymbol = (symbol: string) => {
     const trimmed = symbol.trim();
     if (!trimmed) return;
-    setSymbols((prev) => (prev.includes(trimmed) ? prev : [...prev, trimmed]));
+    const key = getInstrumentKey(trimmed);
+    setSymbols((prev) => (prev.includes(key) ? prev : [...prev, key]));
     setModalOpen(false);
     setSearch('');
     setManualKey('');
   };
 
-  const searchResults = search.trim()
+  // Debounced search against the NSE instrument directory (1500+ MIS-eligible stocks)
+  useEffect(() => {
+    const term = search.trim();
+    if (!term) {
+      setApiResults([]);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      try {
+        const { data } = await marketApi.searchInstruments(term);
+        setApiResults((data as { data: InstrumentInfo[] }).data ?? []);
+      } catch (err) {
+        console.error('Watchlist: instrument search failed', err);
+        setApiResults([]);
+      }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [search]);
+
+  const localResults = search.trim()
     ? INSTRUMENT_DIRECTORY.filter(
         (i) =>
           i.label.toLowerCase().includes(search.toLowerCase()) ||
           i.key.toLowerCase().includes(search.toLowerCase()),
       )
     : [];
+
+  const searchResults = [
+    ...localResults,
+    ...apiResults.filter((i) => !localResults.some((l) => l.key === i.key)),
+  ];
 
   const marketOpen = isMarketOpen();
 

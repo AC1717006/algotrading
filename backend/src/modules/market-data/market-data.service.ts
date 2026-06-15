@@ -2,6 +2,7 @@ import { upstoxClient } from '../broker/upstox.client';
 import { cacheGet, cacheSet } from '../../database/client';
 import { Candle, Quote } from '../../types';
 import { logger } from '../../utils/logger';
+import { instrumentMappingService } from './instrument-mapping';
 
 const log = logger.child({ category: 'MarketData' });
 
@@ -22,11 +23,12 @@ class MarketDataService {
     fromDate: string,
     toDate: string,
   ): Promise<Candle[]> {
-    const cacheKey = `candles:${symbol}:${interval}:${fromDate}:${toDate}`;
+    const instrumentKey = instrumentMappingService.getInstrumentKey(symbol);
+    const cacheKey = `candles:${instrumentKey}:${interval}:${fromDate}:${toDate}`;
     const cached = await cacheGet<Candle[]>(cacheKey);
     if (cached) return cached;
 
-    const raw = await upstoxClient.getHistoricalCandles(symbol, interval, toDate, fromDate);
+    const raw = await upstoxClient.getHistoricalCandles(instrumentKey, interval, toDate, fromDate);
     const candles: Candle[] = raw
       .map((c) => ({
         timestamp: new Date(c[0] as string).getTime(),
@@ -47,6 +49,7 @@ class MarketDataService {
     interval: string,
     days: number,
   ): Promise<{ symbol: string; interval: string; from: string; to: string; candles: Candle[]; total: number }> {
+    const instrumentKey = instrumentMappingService.getInstrumentKey(symbol);
     const to = new Date();
     const from = new Date(to);
     from.setDate(from.getDate() - days);
@@ -54,7 +57,7 @@ class MarketDataService {
     const toStr = to.toISOString().slice(0, 10);
     const fromStr = from.toISOString().slice(0, 10);
 
-    const cacheKey = `history:${symbol}:${interval}:${days}:${toStr}`;
+    const cacheKey = `history:${instrumentKey}:${interval}:${days}:${toStr}`;
     const cached = await cacheGet<{ symbol: string; interval: string; from: string; to: string; candles: Candle[]; total: number }>(cacheKey);
     if (cached) return cached;
 
@@ -68,7 +71,7 @@ class MarketDataService {
         if (chunkStart < from) chunkStart.setTime(from.getTime());
 
         const chunk = await upstoxClient.getHistoricalCandles(
-          symbol,
+          instrumentKey,
           interval,
           chunkEnd.toISOString().slice(0, 10),
           chunkStart.toISOString().slice(0, 10),
@@ -79,7 +82,7 @@ class MarketDataService {
         chunkEnd.setDate(chunkEnd.getDate() - 1);
       }
     } else {
-      raw = await upstoxClient.getHistoricalCandles(symbol, interval, toStr, fromStr);
+      raw = await upstoxClient.getHistoricalCandles(instrumentKey, interval, toStr, fromStr);
     }
 
     const seen = new Set<number>();
@@ -105,12 +108,22 @@ class MarketDataService {
   }
 
   async getQuotes(symbols: string[]): Promise<Record<string, Quote>> {
-    const rawQuotes = await upstoxClient.getQuotes(symbols) as Record<string, RawQuote>;
+    const instrumentKeys = symbols.map((s) => instrumentMappingService.getInstrumentKey(s));
+    const rawQuotes = await upstoxClient.getQuotes(instrumentKeys) as Record<string, RawQuote>;
     const result: Record<string, Quote> = {};
 
-    for (const [key, q] of Object.entries(rawQuotes)) {
+    // Upstox keys its quote response by "SEGMENT:TradingSymbol" (canonical
+    // symbol), not by the instrument key that was requested — remap back to
+    // whatever identifier the caller sent so lookups stay consistent.
+    for (let i = 0; i < symbols.length; i++) {
+      const requested = symbols[i];
+      const instrumentKey = instrumentKeys[i];
+      const canonical = instrumentMappingService.getCanonicalSymbol(requested);
+      const q = rawQuotes[canonical] ?? rawQuotes[instrumentKey] ?? rawQuotes[requested];
+      if (!q) continue;
+
       const quote: Quote = {
-        symbol: key,
+        symbol: requested,
         ltp: q.last_price,
         open: q.ohlc?.open ?? 0,
         high: q.ohlc?.high ?? 0,
@@ -121,15 +134,15 @@ class MarketDataService {
         changePercent: q.net_change_percentage ?? 0,
         timestamp: Date.now(),
       };
-      result[key] = quote;
-      this.ltpCache.set(key, quote.ltp);
+      result[requested] = quote;
+      this.ltpCache.set(instrumentKey, quote.ltp);
     }
 
     return result;
   }
 
   getLtp(symbol: string): number {
-    return this.ltpCache.get(symbol) ?? 0;
+    return this.ltpCache.get(instrumentMappingService.getInstrumentKey(symbol)) ?? 0;
   }
 
   setLtp(symbol: string, ltp: number): void {

@@ -10,7 +10,7 @@ import {
   type UTCTimestamp,
 } from 'lightweight-charts';
 import { marketApi } from '@/lib/api';
-import { symbolLabel } from '@/lib/symbols';
+import { symbolLabel } from '@/lib/instrument-mapping';
 
 interface Candle {
   timestamp: number;

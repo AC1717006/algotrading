@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { marketApi } from '@/lib/api';
 import { useWebSocket } from '@/hooks/useWebSocket';
+import { symbolLabel } from '@/lib/instrument-mapping';
 
 const INDICES = [
   { key: 'NSE_INDEX|Nifty 50', label: 'NIFTY 50' },
@@ -14,36 +15,17 @@ const INDICES = [
 ];
 
 const WATCHLIST = [
-  'NSE_EQ|INE009A01021', // Reliance
+  'NSE_EQ|INE002A01018', // Reliance
   'NSE_EQ|INE040A01034', // HDFC Bank
   'NSE_EQ|INE062A01020', // SBI
   'NSE_EQ|INE090A01021', // ICICI Bank
   'NSE_EQ|INE467B01029', // TCS
-  'NSE_EQ|INE148A01014', // Infosys
-  'NSE_EQ|INE669C01036', // Bajaj Finance
+  'NSE_EQ|INE009A01021', // Infosys
+  'NSE_EQ|INE296A01032', // Bajaj Finance
   'NSE_EQ|INE585B01010', // Maruti
-  'NSE_EQ|INE029A01011', // ITC
-  'NSE_EQ|INE117A01022', // Wipro
+  'NSE_EQ|INE154A01025', // ITC
+  'NSE_EQ|INE075A01022', // Wipro
 ];
-
-const SYMBOL_LABELS: Record<string, string> = {
-  'NSE_EQ|INE009A01021': 'RELIANCE',
-  'NSE_EQ|INE040A01034': 'HDFCBANK',
-  'NSE_EQ|INE062A01020': 'SBIN',
-  'NSE_EQ|INE090A01021': 'ICICIBANK',
-  'NSE_EQ|INE467B01029': 'TCS',
-  'NSE_EQ|INE148A01014': 'INFY',
-  'NSE_EQ|INE669C01036': 'BAJFINANCE',
-  'NSE_EQ|INE585B01010': 'MARUTI',
-  'NSE_EQ|INE029A01011': 'ITC',
-  'NSE_EQ|INE117A01022': 'WIPRO',
-  'NSE_INDEX|Nifty 50': 'NIFTY 50',
-  'NSE_INDEX|Nifty Bank': 'BANK NIFTY',
-  'BSE_INDEX|SENSEX': 'SENSEX',
-  'MCX_FO|466583': 'GOLD',
-  'MCX_FO|464150': 'SILVER',
-  'MCX_FO|499095': 'CRUDE OIL',
-};
 
 const ALL_SYMBOLS = [...INDICES.map((i) => i.key), ...WATCHLIST];
 
@@ -117,7 +99,7 @@ export function TickerBar() {
           const positive = q.changePercent >= 0;
           return (
             <div key={`${q.symbol}-${idx}`} className="flex items-center gap-1.5 px-5 text-xs font-medium">
-              <span className="text-gray-300">{SYMBOL_LABELS[q.symbol] ?? q.symbol}</span>
+              <span className="text-gray-300">{symbolLabel(q.symbol)}</span>
               <span className="text-white">{q.ltp.toFixed(2)}</span>
               <span className={positive ? 'text-success' : 'text-danger'}>
                 {positive ? '▲' : '▼'} {Math.abs(q.changePercent).toFixed(2)}%

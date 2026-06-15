@@ -10,6 +10,7 @@ import { strategyEngine } from '../strategies/strategy.engine';
 import { logger } from '../../utils/logger';
 import { JwtPayload, WsMessage } from '../../types';
 import { prisma } from '../../database/client';
+import { instrumentMappingService } from './instrument-mapping';
 
 const log = logger.child({ category: 'WebSocket' });
 
@@ -58,11 +59,11 @@ export class WebSocketService {
         try {
           const msg = JSON.parse(raw.toString()) as { type: string; symbols?: string[] };
           if (msg.type === 'SUBSCRIBE' && Array.isArray(msg.symbols)) {
-            msg.symbols.forEach((s) => ws.subscriptions.add(s));
+            msg.symbols.forEach((s) => ws.subscriptions.add(instrumentMappingService.getInstrumentKey(s)));
             log.debug('Client subscribed', { userId: ws.userId, symbols: msg.symbols });
           }
           if (msg.type === 'UNSUBSCRIBE' && Array.isArray(msg.symbols)) {
-            msg.symbols.forEach((s) => ws.subscriptions.delete(s));
+            msg.symbols.forEach((s) => ws.subscriptions.delete(instrumentMappingService.getInstrumentKey(s)));
           }
           if (msg.type === 'PING') {
             this.sendTo(ws, { type: 'ALERT', payload: { message: 'pong' }, timestamp: Date.now() });
@@ -134,6 +135,7 @@ export class WebSocketService {
 
   // ─── Upstox live market feed ─────────────────────────────────────────────────
   async connectUpstoxFeed(instrumentKeys: string[]): Promise<void> {
+    instrumentKeys = instrumentKeys.map((k) => instrumentMappingService.getInstrumentKey(k));
     if (!instrumentKeys.length) {
       log.warn('No instruments to subscribe — feed not started');
       return;

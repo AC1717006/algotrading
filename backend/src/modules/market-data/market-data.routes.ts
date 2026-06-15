@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { query, validationResult } from 'express-validator';
 import { authenticate } from '../../middleware/auth';
 import { marketDataService } from './market-data.service';
+import { instrumentService } from './instrument.service';
 import { ApiResponse } from '../../types';
 
 const router = Router();
@@ -114,5 +115,32 @@ router.get('/ltp', authenticate, (req: Request, res: Response): void => {
     res.json(<ApiResponse>{ success: true, data: marketDataService.getAllLtps() });
   }
 });
+
+/**
+ * @swagger
+ * /market/instruments/search:
+ *   get:
+ *     tags: [Market Data]
+ *     summary: Search NSE MIS-eligible instruments by symbol or name
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: query, name: q, required: true, schema: { type: string }, description: Search text (symbol or name) }
+ *       - { in: query, name: limit, required: false, schema: { type: integer }, description: "Max results (default 20)" }
+ */
+router.get(
+  '/instruments/search',
+  authenticate,
+  [query('q').notEmpty()],
+  (req: Request, res: Response): void => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      res.status(400).json({ success: false, errors: errors.mapped() } as any);
+      return;
+    }
+    const { q, limit } = req.query as { q: string; limit?: string };
+    const results = instrumentService.searchNse(q, limit ? parseInt(limit, 10) : 20);
+    res.json(<ApiResponse>{ success: true, data: results });
+  },
+);
 
 export default router;

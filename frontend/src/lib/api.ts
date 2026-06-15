@@ -84,6 +84,7 @@ export const marketApi = {
   history: (params: { symbol: string; interval?: string; days?: number }) => api.get('/market/history', { params }),
   quotes: (symbols: string) => publicApi.get('/market/quotes', { params: { symbols } }),
   ltp: (symbol?: string) => api.get('/market/ltp', { params: symbol ? { symbol } : {} }),
+  searchInstruments: (q: string) => api.get('/market/instruments/search', { params: { q } }),
 };
 
 export const systemApi = {
