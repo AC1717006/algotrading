@@ -9,25 +9,30 @@
 import { useEffect, useState } from 'react';
 import { marketApi } from './api';
 
+/**
+ * Shape returned by the backend's `InstrumentInfo` (instrument.service.ts
+ * `toInfo()`), used by both `/market/instruments/search` and
+ * `/market/instruments/resolve`.
+ */
 export interface InstrumentMapping {
-  instrumentKey: string;
-  canonicalSymbol: string;
-  tradingSymbol: string;
+  key: string;
+  label: string;
   name: string;
   exchange: string;
   isin: string;
+  canonicalSymbol: string;
 }
 
-/** Backward-compatible alias used by older components. */
-export type InstrumentInfo = InstrumentMapping & { key: string; label: string };
+/** Alias for components that prefer the `InstrumentInfo` name. */
+export type InstrumentInfo = InstrumentMapping;
 
 const cache = new Map<string, InstrumentMapping>();
 const inFlight = new Map<string, Promise<void>>();
 
 function cacheMapping(m: InstrumentMapping): void {
-  cache.set(m.instrumentKey, m);
+  cache.set(m.key, m);
   cache.set(m.canonicalSymbol, m);
-  cache.set(m.tradingSymbol.toUpperCase(), m);
+  cache.set(m.label.toUpperCase(), m);
 }
 
 /** Synchronous lookup against whatever has been resolved so far. */
@@ -38,7 +43,7 @@ export function getCached(input: string): InstrumentMapping | undefined {
 /** Display label — resolved trading symbol if cached, else a best-effort fallback from the raw identifier. */
 export function symbolLabel(input: string): string {
   const cached = getCached(input);
-  if (cached) return cached.tradingSymbol;
+  if (cached) return cached.label;
   return input.split(/[|:]/).pop() ?? input;
 }
 
@@ -48,7 +53,7 @@ export function isIndexSymbol(input: string): boolean {
 
 /** Normalize any supported format to the app-wide instrument key. Falls back to the input if not yet resolved. */
 export function getInstrumentKey(input: string): string {
-  return getCached(input)?.instrumentKey ?? input;
+  return getCached(input)?.key ?? input;
 }
 
 /** Normalize any supported format to Upstox's "SEGMENT:TradingSymbol" quote-response key. Falls back to the input if not yet resolved. */

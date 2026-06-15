@@ -115,11 +115,18 @@ class MarketDataService {
     // Upstox keys its quote response by "SEGMENT:TradingSymbol" (canonical
     // symbol), not by the instrument key that was requested — remap back to
     // whatever identifier the caller sent so lookups stay consistent.
+    //
+    // For INDEX instruments, the instrument key's identifier segment (the
+    // part after "|", e.g. "Nifty 50") is itself the quote response key
+    // ("NSE_INDEX:Nifty 50"), which can differ from the trading symbol
+    // ("NIFTY"). Try both forms.
     for (let i = 0; i < symbols.length; i++) {
       const requested = symbols[i];
       const instrumentKey = instrumentKeys[i];
-      const canonical = instrumentMappingService.getCanonicalSymbol(requested);
-      const q = rawQuotes[canonical] ?? rawQuotes[instrumentKey] ?? rawQuotes[requested];
+      const instrument = instrumentMappingService.resolve(requested);
+      const canonical = instrument?.canonicalSymbol ?? requested;
+      const altCanonical = instrument ? `${instrument.exchange}:${instrument.instrumentKey.split('|')[1]}` : undefined;
+      const q = rawQuotes[canonical] ?? (altCanonical ? rawQuotes[altCanonical] : undefined) ?? rawQuotes[instrumentKey] ?? rawQuotes[requested];
       if (!q) continue;
 
       const quote: Quote = {
