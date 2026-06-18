@@ -7,7 +7,7 @@ import { PlaceOrderRequest, UpstoxGttRule } from '../../types';
 import { logger } from '../../utils/logger';
 
 const log = logger.child({ category: 'LiveEngine' });
-const POLL_INTERVAL_MS = 5_000;
+const POLL_INTERVAL_MS = 1_000;
 const BROKERAGE = 0.0003;
 
 interface UpstoxPosition {

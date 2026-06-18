@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { marketApi } from '@/lib/api';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { symbolLabel, useInstrumentDirectory } from '@/lib/instrument-mapping';
+import { usePollInterval } from '@/hooks/usePollInterval';
 
 const INDICES = [
   'NSE_INDEX|Nifty 50',
@@ -52,8 +53,8 @@ export function TickerBar() {
 
   useEffect(() => {
     fetchQuotes();
-    const interval = setInterval(fetchQuotes, 5_000);
-    return () => clearInterval(interval);
+    const id = setInterval(fetchQuotes, pollInterval);
+    return () => clearInterval(id);
   }, [fetchQuotes]);
 
   useEffect(() => {
@@ -73,6 +74,7 @@ export function TickerBar() {
     });
   }, []);
 
+  const pollInterval = usePollInterval();
   useWebSocket(onMessage, ALL_SYMBOLS);
   useInstrumentDirectory(ALL_SYMBOLS);
 

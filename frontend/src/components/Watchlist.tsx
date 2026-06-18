@@ -6,6 +6,7 @@ import { marketApi } from '@/lib/api';
 import { DEFAULT_WATCHLIST, isIndexSymbol, symbolLabel, getInstrumentKey, useInstrumentDirectory } from '@/lib/instrument-mapping';
 import type { InstrumentInfo } from '@/lib/instrument-mapping';
 import { isMarketOpen, formatIstClock } from '@/lib/market';
+import { usePollInterval } from '@/hooks/usePollInterval';
 import { Modal } from '@/components/Modal';
 
 const STORAGE_KEY = 'watchlist_symbols';
@@ -33,6 +34,7 @@ interface WatchlistProps {
 
 export function Watchlist({ selectedSymbol, onSelectSymbol, onSymbolsChange }: WatchlistProps) {
   const [symbols, setSymbols] = useState<string[]>(DEFAULT_WATCHLIST);
+  const pollInterval = usePollInterval();
   const [quotes, setQuotes] = useState<Record<string, QuoteRow>>({});
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
@@ -76,9 +78,9 @@ export function Watchlist({ selectedSymbol, onSelectSymbol, onSymbolsChange }: W
 
   useEffect(() => {
     fetchQuotes();
-    const interval = setInterval(fetchQuotes, 5_000);
-    return () => clearInterval(interval);
-  }, [fetchQuotes]);
+    const id = setInterval(fetchQuotes, pollInterval);
+    return () => clearInterval(id);
+  }, [fetchQuotes, pollInterval]);
 
   const removeSymbol = (symbol: string) => {
     setSymbols((prev) => prev.filter((s) => s !== symbol));

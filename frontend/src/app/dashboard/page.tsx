@@ -3,6 +3,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, useCallback } from 'react';
 import { tradingApi } from '@/lib/api';
+import { usePollInterval } from '@/hooks/usePollInterval';
 import { StatCard } from '@/components/StatCard';
 import { Watchlist } from '@/components/Watchlist';
 import { HistoricalChart } from '@/components/HistoricalChart';
@@ -18,6 +19,8 @@ export default function DashboardPage() {
   const [selectedSymbol, setSelectedSymbol] = useState<string | undefined>(undefined);
   const [watchlistSymbols, setWatchlistSymbols] = useState<string[]>([]);
 
+  const pollInterval = usePollInterval();
+
   const { data: summary } = useQuery({
     queryKey: ['trading-summary'],
     queryFn: () => tradingApi.getSummary().then((r) => (r.data as { data: Record<string, unknown> }).data),
@@ -27,7 +30,7 @@ export default function DashboardPage() {
   const { data: orders } = useQuery({
     queryKey: ['open-orders'],
     queryFn: () => tradingApi.getOrders({ status: 'OPEN' }).then((r) => (r.data as { data: unknown[] }).data),
-    refetchInterval: 5_000,
+    refetchInterval: pollInterval,
   });
 
   const onWsMessage = useCallback((msg: { type: string; payload: unknown }) => {
