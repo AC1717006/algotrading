@@ -10,15 +10,24 @@ interface RiskSettings {
   maxTradesPerDay: number;
   maxPositionSizePct: number;
   circuitBreakerLossPct: number;
+  // Phase 4 additions
+  maxOpenPositions: number;
+  tradeCooldownMinutes: number;
+  riskPerTradePct: number;
+  killSwitchActive: boolean;
 }
 
 export class RiskManager {
   private circuitBreakerActive = false;
   private settings: RiskSettings = {
-    maxDailyLossPct: 2,
-    maxTradesPerDay: 20,
-    maxPositionSizePct: 10,
-    circuitBreakerLossPct: 5,
+    maxDailyLossPct:       2,
+    maxTradesPerDay:        20,
+    maxPositionSizePct:    10,
+    circuitBreakerLossPct:  5,
+    maxOpenPositions:       3,
+    tradeCooldownMinutes:  15,
+    riskPerTradePct:        1,
+    killSwitchActive:      false,
   };
 
   async loadSettings(): Promise<void> {
@@ -31,17 +40,25 @@ export class RiskManager {
             'max_position_size_pct',
             'circuit_breaker_loss_pct',
             'circuit_breaker_active',
+            'max_open_positions',
+            'trade_cooldown_minutes',
+            'risk_per_trade_pct',
+            'kill_switch_active',
           ],
         },
       },
     });
     for (const row of rows) {
       switch (row.key) {
-        case 'max_daily_loss_pct':        this.settings.maxDailyLossPct       = Number(row.value); break;
-        case 'max_trades_per_day':         this.settings.maxTradesPerDay        = Number(row.value); break;
-        case 'max_position_size_pct':      this.settings.maxPositionSizePct     = Number(row.value); break;
-        case 'circuit_breaker_loss_pct':   this.settings.circuitBreakerLossPct  = Number(row.value); break;
-        case 'circuit_breaker_active':     this.circuitBreakerActive            = row.value === 'true'; break;
+        case 'max_daily_loss_pct':       this.settings.maxDailyLossPct       = Number(row.value); break;
+        case 'max_trades_per_day':        this.settings.maxTradesPerDay        = Number(row.value); break;
+        case 'max_position_size_pct':     this.settings.maxPositionSizePct     = Number(row.value); break;
+        case 'circuit_breaker_loss_pct':  this.settings.circuitBreakerLossPct  = Number(row.value); break;
+        case 'circuit_breaker_active':    this.circuitBreakerActive             = row.value === 'true'; break;
+        case 'max_open_positions':        this.settings.maxOpenPositions        = Number(row.value); break;
+        case 'trade_cooldown_minutes':    this.settings.tradeCooldownMinutes    = Number(row.value); break;
+        case 'risk_per_trade_pct':        this.settings.riskPerTradePct         = Number(row.value); break;
+        case 'kill_switch_active':        this.settings.killSwitchActive        = row.value === 'true'; break;
       }
     }
   }
@@ -54,6 +71,11 @@ export class RiskManager {
     mode: TradingMode,
   ): Promise<RiskCheckResult> {
     await this.loadSettings();
+
+    // 0. Kill switch — blocks ALL orders immediately
+    if (this.settings.killSwitchActive) {
+      return { passed: false, reason: 'Kill switch is active — all trading immediately halted' };
+    }
 
     // 1. Circuit breaker
     if (this.circuitBreakerActive) {
@@ -109,6 +131,56 @@ export class RiskManager {
       };
     }
 
+    // 5. Max open positions (Phase 4)
+    if (this.settings.maxOpenPositions > 0) {
+      const openCount = await prisma.position.count({
+        where: { mode, isOpen: true },
+      });
+      if (openCount >= this.settings.maxOpenPositions) {
+        return {
+          passed: false,
+          reason: `Max open positions reached: ${openCount}/${this.settings.maxOpenPositions}`,
+        };
+      }
+    }
+
+    // 6. Trade cooldown — block re-entry on same symbol within cooldown window (Phase 4)
+    if (this.settings.tradeCooldownMinutes > 0) {
+      const cooldownMs = this.settings.tradeCooldownMinutes * 60 * 1000;
+      const sinceTs = new Date(Date.now() - cooldownMs);
+      const recentOrder = await prisma.order.findFirst({
+        where: {
+          userId,
+          symbol: order.symbol,
+          mode,
+          status: 'FILLED',
+          filledAt: { gte: sinceTs },
+        },
+        orderBy: { filledAt: 'desc' },
+      });
+      if (recentOrder) {
+        const minsAgo = Math.round((Date.now() - (recentOrder.filledAt?.getTime() ?? 0)) / 60_000);
+        return {
+          passed: false,
+          reason: `Trade cooldown active for ${order.symbol}: last trade ${minsAgo} min ago (cooldown: ${this.settings.tradeCooldownMinutes} min)`,
+        };
+      }
+    }
+
+    // 7. Risk per trade % of equity (Phase 4)
+    // Only applies when stopLoss is provided (we need it to compute risk amount)
+    if (this.settings.riskPerTradePct > 0 && order.stopLoss) {
+      const qty = order.qty ?? 1;
+      const riskAmount = qty * Math.abs(currentPrice - order.stopLoss);
+      const maxRisk = accountEquity * this.settings.riskPerTradePct / 100;
+      if (riskAmount > maxRisk) {
+        return {
+          passed: false,
+          reason: `Risk per trade ₹${riskAmount.toFixed(2)} exceeds max ${this.settings.riskPerTradePct}% of equity ₹${maxRisk.toFixed(2)}`,
+        };
+      }
+    }
+
     return { passed: true };
   }
 
@@ -145,8 +217,27 @@ export class RiskManager {
     await telegramService.notify('🟢 Circuit breaker has been manually reset — trading resumed.');
   }
 
+  async setKillSwitch(active: boolean): Promise<void> {
+    this.settings.killSwitchActive = active;
+    await prisma.setting.upsert({
+      where: { key: 'kill_switch_active' },
+      update: { value: String(active) },
+      create: { key: 'kill_switch_active', value: String(active), description: 'Emergency kill switch - blocks all orders' },
+    });
+    log.warn(`Kill switch ${active ? 'ACTIVATED' : 'deactivated'}`);
+    if (active) {
+      await telegramService.alert('🔴 KILL SWITCH ACTIVATED', 'All order placement is now blocked.');
+    } else {
+      await telegramService.notify('🟢 Kill switch deactivated — trading resumed.');
+    }
+  }
+
   isActive(): boolean {
     return this.circuitBreakerActive;
+  }
+
+  isKillSwitchActive(): boolean {
+    return this.settings.killSwitchActive;
   }
 
   scheduleDailyReset(): void {

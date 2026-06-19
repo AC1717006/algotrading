@@ -24,21 +24,32 @@ const CRON_INTERVAL_MS = 5 * 60 * 1000;
 const LOCK_TTL_SECONDS = 270; // 4.5 min — shorter than cron interval to avoid stranded locks
 const LOCK_PREFIX      = 'lock:strategy-run:';
 
-function aggregateCandles(candles: Candle[], groupSize: number): Candle[] {
-  const result: Candle[] = [];
-  for (let i = 0; i < candles.length; i += groupSize) {
-    const group = candles.slice(i, i + groupSize);
-    if (group.length === 0) continue;
-    result.push({
-      timestamp: group[0]!.timestamp,
-      open: group[0]!.open,
-      high: Math.max(...group.map((c) => c.high)),
-      low: Math.min(...group.map((c) => c.low)),
-      close: group[group.length - 1]!.close,
-      volume: group.reduce((sum, c) => sum + c.volume, 0),
-    });
+/**
+ * Aggregate 1-minute candles into 5-minute candles using IST timestamp bucketing.
+ * This correctly aligns bars to market session boundaries (9:15, 9:20, 9:25…)
+ * regardless of when the oldest candle in the slice was recorded.
+ */
+function aggregateTo5Min(candles: Candle[]): Candle[] {
+  const groups = new Map<number, Candle[]>();
+  for (const c of candles) {
+    // Shift UTC timestamp to IST (UTC+5:30) for bucketing
+    const istMs = c.timestamp + 5.5 * 3_600_000;
+    const d = new Date(istMs);
+    const totalMin = d.getUTCHours() * 60 + d.getUTCMinutes();
+    const bucket = Math.floor(totalMin / 5) * 5; // align to 5-min boundary
+    if (!groups.has(bucket)) groups.set(bucket, []);
+    groups.get(bucket)!.push(c);
   }
-  return result;
+  return Array.from(groups.entries())
+    .sort((a, b) => a[0] - b[0])
+    .map(([, group]) => ({
+      timestamp: group[0]!.timestamp,
+      open:      group[0]!.open,
+      high:      Math.max(...group.map((c) => c.high)),
+      low:       Math.min(...group.map((c) => c.low)),
+      close:     group[group.length - 1]!.close,
+      volume:    group.reduce((s, c) => s + c.volume, 0),
+    }));
 }
 
 export class StrategyEngine {
@@ -106,20 +117,9 @@ export class StrategyEngine {
       mode:       dbRow.mode as 'PAPER' | 'LIVE',
     };
 
-    log.info('Strategy running', { name: cfg.name, symbol: cfg.symbol, type: cfg.type, mode: cfg.mode });
+    log.info('[STRATEGY_RUN] Started', { name: cfg.name, symbol: cfg.symbol, type: cfg.type, mode: cfg.mode });
 
     const strategy = this.buildStrategy(cfg);
-
-    // ── Skip if a position for this symbol is already open ───────────────────
-    const existingPosition = await prisma.position.findFirst({
-      where: { symbol: cfg.symbol, mode: cfg.mode, isOpen: true },
-    });
-    if (existingPosition) {
-      log.debug('Signal ignored — position already open', {
-        strategy: cfg.name, symbol: cfg.symbol, positionId: existingPosition.id,
-      });
-      return;
-    }
 
     // ── Fetch and aggregate candles ──────────────────────────────────────────
     let candles: Candle[] = [];
@@ -135,30 +135,53 @@ export class StrategyEngine {
           volume:    c[5] as number,
         }))
         .sort((a, b) => a.timestamp - b.timestamp)
-        .slice(-50);
-      candles = aggregateCandles(oneMinCandles, 5);
-      log.info('Candles fetched', { strategy: cfg.name, oneMin: oneMinCandles.length, fiveMin: candles.length });
+        .slice(-200); // fetch up to 200 1-min candles for more complete history
+      candles = aggregateTo5Min(oneMinCandles);
+      log.info('[CANDLES_OK] Fetched', { strategy: cfg.name, oneMin: oneMinCandles.length, fiveMin: candles.length });
     } catch (err) {
       log.error('Failed to fetch candles', { strategyId, symbol: cfg.symbol, err });
       return;
     }
 
-    if (candles.length < 5) {
-      log.debug('Not enough candles', { strategyId, count: candles.length });
+    // Strategy-specific minimum candle threshold
+    const minCandles = cfg.type === 'THREE_CANDLE_MOMENTUM' ? 3 : 5;
+    if (candles.length < minCandles) {
+      log.debug('Not enough candles', { strategyId, count: candles.length, required: minCandles });
       return;
     }
 
     const currentPrice = candles[candles.length - 1]!.close;
-    log.info('Indicators calculated', { strategy: cfg.name, currentPrice, candleCount: candles.length });
+    log.info('[CANDLES_OK] Indicators ready', { strategy: cfg.name, currentPrice, candleCount: candles.length });
 
+    // ── Run the strategy analysis FIRST, then check positions ───────────────
     const signal: StrategySignal = strategy.analyze(candles, currentPrice);
 
+    log.info('[SIGNAL]', { strategy: cfg.name, type: signal.type, reason: signal.reason });
+
     if (signal.type === 'HOLD') {
-      log.debug('Signal: HOLD', { name: cfg.name, reason: signal.reason });
+      log.debug('[SIGNAL_IGNORED] HOLD', { name: cfg.name, reason: signal.reason });
       return;
     }
 
-    log.info('Signal generated', {
+    // ── Position guard: allow opposite-direction signals (close existing) ─────
+    const existingPosition = await prisma.position.findFirst({
+      where: { symbol: cfg.symbol, mode: cfg.mode, isOpen: true },
+    });
+    if (existingPosition) {
+      const existingSide = (existingPosition as { side?: string }).side ?? 'BUY';
+      if (existingSide === signal.type) {
+        log.debug('[SIGNAL_IGNORED] Same-direction position already open (no pyramid)', {
+          strategy: cfg.name, symbol: cfg.symbol, existingSide, signalType: signal.type,
+        });
+        return;
+      }
+      // Opposite signal (e.g., SELL with open LONG) → fall through to close
+      log.info('[SIGNAL] Opposite direction — will close existing position', {
+        strategy: cfg.name, existingSide, signalType: signal.type,
+      });
+    }
+
+    log.info('[SIGNAL] Generated', {
       strategy: cfg.name, signal: signal.type, price: signal.price,
       sl: signal.stopLoss, target: signal.target, reason: signal.reason,
     });
@@ -171,18 +194,11 @@ export class StrategyEngine {
         action:     signal.type,
         price:      signal.price,
         reason:     signal.reason,
-        indicators: signal.indicators as any,
+        indicators: signal.indicators as unknown as import('@prisma/client').Prisma.InputJsonValue,
       },
     });
 
-    await telegramService.notify(
-      `📊 *${signal.type}* Signal — ${cfg.name}\n` +
-      `Symbol: ${cfg.symbol}\n` +
-      `Price: ₹${signal.price.toFixed(2)}\n` +
-      `Reason: ${signal.reason}\n` +
-      `Stop Loss: ₹${signal.stopLoss?.toFixed(2) ?? 'N/A'}\n` +
-      `Target: ₹${signal.target?.toFixed(2) ?? 'N/A'}`,
-    );
+    await telegramService.notifySignal(cfg.name, signal.type, cfg.symbol, signal.price, signal.stopLoss, signal.target);
 
     // Find active trader/admin to attribute the order to
     const user = await prisma.user.findFirst({
@@ -218,7 +234,7 @@ export class StrategyEngine {
       );
 
       await prisma.signal.update({ where: { id: dbSignal.id }, data: { isExecuted: true } });
-      log.info('Strategy order placed', {
+      log.info('[ORDER_PLACED]', {
         strategy: cfg.name, side: signal.type, qty, price: signal.price, mode: cfg.mode,
       });
     } catch (err) {

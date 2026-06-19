@@ -189,6 +189,29 @@ router.get('/summary', authenticate, async (req: Request, res: Response): Promis
 
 /**
  * @swagger
+ * /trading/analytics:
+ *   get:
+ *     tags: [Trading]
+ *     summary: Analytics — daily P&L, win/loss stats, monthly returns
+ *     security: [{ bearerAuth: [] }]
+ */
+router.get(
+  '/analytics',
+  authenticate,
+  [
+    query('days').optional().isInt({ min: 1, max: 365 }),
+    query('mode').optional().isIn(['PAPER', 'LIVE']),
+  ],
+  async (req: Request, res: Response): Promise<void> => {
+    const user = (req as AuthRequest).user;
+    const { mode, days } = req.query as { mode?: string; days?: string };
+    const analytics = await tradingService.getAnalytics(user.sub, mode as TradingMode, days ? Number(days) : 30);
+    res.json(<ApiResponse>{ success: true, data: analytics });
+  },
+);
+
+/**
+ * @swagger
  * /trading/risk/status:
  *   get:
  *     tags: [Trading]
@@ -196,7 +219,10 @@ router.get('/summary', authenticate, async (req: Request, res: Response): Promis
  *     security: [{ bearerAuth: [] }]
  */
 router.get('/risk/status', authenticate, (_req, res: Response): void => {
-  res.json(<ApiResponse>{ success: true, data: { circuitBreakerActive: riskManager.isActive() } });
+  res.json(<ApiResponse>{ success: true, data: {
+    circuitBreakerActive: riskManager.isActive(),
+    killSwitchActive: riskManager.isKillSwitchActive(),
+  } });
 });
 
 /**
@@ -215,6 +241,35 @@ router.post(
   async (_req, res: Response): Promise<void> => {
     await riskManager.resetCircuitBreaker();
     res.json(<ApiResponse>{ success: true, message: 'Circuit breaker reset — trading resumed' });
+  },
+);
+
+/**
+ * @swagger
+ * /trading/risk/kill-switch:
+ *   post:
+ *     tags: [Trading]
+ *     summary: Activate or deactivate the emergency kill switch — Admin only
+ *     security: [{ bearerAuth: [] }]
+ */
+router.post(
+  '/risk/kill-switch',
+  authenticate,
+  authorize('ADMIN'),
+  auditLog('KILL_SWITCH', 'settings'),
+  [body('active').isBoolean()],
+  async (req: Request, res: Response): Promise<void> => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      res.status(400).json({ success: false, errors: errors.mapped() } as unknown as ApiResponse);
+      return;
+    }
+    const { active } = req.body as { active: boolean };
+    await riskManager.setKillSwitch(active);
+    res.json(<ApiResponse>{
+      success: true,
+      message: `Kill switch ${active ? 'ACTIVATED — all trading halted' : 'deactivated — trading resumed'}`,
+    });
   },
 );
 

@@ -133,6 +133,69 @@ export class TradingService {
       circuitBreakerActive: false,
     };
   }
+
+  // ─── Phase 6: Analytics ───────────────────────────────────────────────────────
+  async getAnalytics(userId: string, mode?: TradingMode, days = 30) {
+    const fromDate = new Date();
+    fromDate.setDate(fromDate.getDate() - days);
+    fromDate.setHours(0, 0, 0, 0);
+
+    const tradeWhere = {
+      order: { userId },
+      ...(mode ? { mode } : {}),
+      createdAt: { gte: fromDate },
+      exitPrice: { not: null }, // only closed trades
+    };
+
+    const allTrades = await prisma.trade.findMany({
+      where: tradeWhere,
+      orderBy: { createdAt: 'asc' },
+    });
+
+    // Daily PnL grouping
+    const dailyPnlMap = new Map<string, number>();
+    for (const t of allTrades) {
+      const dateKey = t.createdAt.toISOString().substring(0, 10);
+      dailyPnlMap.set(dateKey, (dailyPnlMap.get(dateKey) ?? 0) + (t.pnl ?? 0));
+    }
+    const dailyPnl = Array.from(dailyPnlMap.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([date, pnl]) => ({ date, pnl }));
+
+    const wins   = allTrades.filter((t) => (t.pnl ?? 0) > 0);
+    const losses = allTrades.filter((t) => (t.pnl ?? 0) <= 0);
+    const totalPnl  = allTrades.reduce((s, t) => s + (t.pnl ?? 0), 0);
+    const winRate   = allTrades.length ? (wins.length / allTrades.length) * 100 : 0;
+    const avgWin    = wins.length    ? wins.reduce((s, t) => s + (t.pnl ?? 0), 0)    / wins.length   : 0;
+    const avgLoss   = losses.length  ? losses.reduce((s, t) => s + (t.pnl ?? 0), 0)  / losses.length : 0;
+    const bestTrade = allTrades.reduce((b, t) => ((t.pnl ?? 0) > (b?.pnl ?? -Infinity) ? t : b), allTrades[0]);
+    const worstTrade = allTrades.reduce((w, t) => ((t.pnl ?? 0) < (w?.pnl ?? Infinity) ? t : w), allTrades[0]);
+
+    // Monthly returns
+    const monthlyMap = new Map<string, number>();
+    for (const t of allTrades) {
+      const month = t.createdAt.toISOString().substring(0, 7);
+      monthlyMap.set(month, (monthlyMap.get(month) ?? 0) + (t.pnl ?? 0));
+    }
+    const monthlyReturns = Array.from(monthlyMap.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([month, pnl]) => ({ month, pnl }));
+
+    return {
+      period: { days, from: fromDate.toISOString().substring(0, 10) },
+      totalTrades: allTrades.length,
+      wins: wins.length,
+      losses: losses.length,
+      winRate,
+      totalPnl,
+      avgWin,
+      avgLoss,
+      bestTrade:  bestTrade?.pnl  ?? null,
+      worstTrade: worstTrade?.pnl ?? null,
+      dailyPnl,
+      monthlyReturns,
+    };
+  }
 }
 
 export const tradingService = new TradingService();

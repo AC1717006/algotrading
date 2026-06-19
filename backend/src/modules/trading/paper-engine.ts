@@ -8,6 +8,23 @@ import { logger } from '../../utils/logger';
 const log = logger.child({ category: 'PaperEngine' });
 const BROKERAGE = 0.0003; // 0.03% per leg
 
+// Helper to read the `side` field from a Prisma Position row
+// (added via migration — cast through unknown to avoid TS strict-mode errors)
+function positionSide(pos: { side?: unknown }): 'BUY' | 'SELL' {
+  return (pos.side as 'BUY' | 'SELL') ?? 'BUY';
+}
+
+type AutoExitPosition = {
+  id: string;
+  symbol: string;
+  exchange: string;
+  qty: number;
+  avgPrice: number;
+  product: string;
+  strategyId: string | null;
+  side?: unknown;
+};
+
 export class PaperTradingEngine {
   // ─── Balance ─────────────────────────────────────────────────────────────────
   async getBalance(userId: string): Promise<number> {
@@ -36,7 +53,7 @@ export class PaperTradingEngine {
     req: PlaceOrderRequest,
     currentPrice: number,
   ): Promise<{ orderId: string; tradeId?: string }> {
-    log.info('Paper order request', { symbol: req.symbol, side: req.side, qty: req.qty, price: currentPrice });
+    log.info('[ORDER_CREATED] Paper order request', { symbol: req.symbol, side: req.side, qty: req.qty, price: currentPrice });
 
     const balance = await this.getBalance(userId);
 
@@ -52,10 +69,29 @@ export class PaperTradingEngine {
     }
 
     const fillPrice = req.price ?? currentPrice;
-    const orderValue = req.qty * fillPrice;
+    const qty = req.qty ?? 1;
+    const orderValue = qty * fillPrice;
+    const charges = orderValue * BROKERAGE;
 
-    if (req.side === 'BUY' && balance < orderValue) {
-      throw new AppError(400, `Insufficient paper balance. Need ₹${orderValue.toFixed(2)}, have ₹${balance.toFixed(2)}`);
+    // Check if an opposite-direction position already exists (close scenario)
+    const existingPos = await prisma.position.findFirst({
+      where: { symbol: req.symbol, mode: 'PAPER', isOpen: true },
+    });
+    const existingSide = existingPos ? positionSide(existingPos as { side?: unknown }) : null;
+
+    // Determine action:
+    // BUY  + no pos        → open LONG    (deduct orderValue + charges)
+    // SELL + no pos        → open SHORT   (receive orderValue - charges)
+    // BUY  + existing SELL → close SHORT  (deduct orderValue + charges to buy back)
+    // SELL + existing BUY  → close LONG   (receive orderValue - charges)
+    const isClosingLong = req.side === 'SELL' && existingSide === 'BUY';
+    const isClosingShort = req.side === 'BUY' && existingSide === 'SELL';
+
+    if (req.side === 'BUY' && !isClosingShort) {
+      // Opening LONG or pyramiding into LONG — need cash
+      if (balance < orderValue + charges) {
+        throw new AppError(400, `Insufficient paper balance. Need ₹${(orderValue + charges).toFixed(2)}, have ₹${balance.toFixed(2)}`);
+      }
     }
 
     const order = await prisma.order.create({
@@ -64,7 +100,7 @@ export class PaperTradingEngine {
         symbol: req.symbol,
         exchange: req.exchange,
         side: req.side,
-        qty: req.qty,
+        qty,
         price: fillPrice,
         orderType: req.orderType as 'MARKET' | 'LIMIT' | 'SL' | 'SL_M',
         product: req.product,
@@ -76,21 +112,42 @@ export class PaperTradingEngine {
       },
     });
 
-    log.info('Paper order created', { orderId: order.id, symbol: req.symbol, side: req.side, qty: req.qty, fillPrice });
+    log.info('[ORDER_CREATED]', { orderId: order.id, symbol: req.symbol, side: req.side, qty, fillPrice });
 
-    const charges = orderValue * BROKERAGE;
+    if (isClosingLong) {
+      // SELL to close LONG — credit proceeds, deduct both-leg charges
+      const { tradeId, pnl } = await this.closePosition(order.id, req, fillPrice, charges, userId, 'BUY');
+      // Balance: return the sale proceeds minus sell charges (entry charges already counted in PnL)
+      await this.adjustBalance(userId, orderValue - charges);
+      log.info('[POSITION_CLOSE] Long closed', { symbol: req.symbol, qty, exitPrice: fillPrice, pnl });
+      await telegramService.notifySell(req.symbol, qty, fillPrice, pnl ?? 0, 'PAPER');
+      return { orderId: order.id, tradeId };
+    }
+
+    if (isClosingShort) {
+      // BUY to cover SHORT — deduct cost of covering
+      const { tradeId, pnl } = await this.closePosition(order.id, req, fillPrice, charges, userId, 'SELL');
+      // Balance: deduct the buy-back cost
+      await this.adjustBalance(userId, -(orderValue + charges));
+      log.info('[POSITION_CLOSE] Short covered', { symbol: req.symbol, qty, coverPrice: fillPrice, pnl });
+      await telegramService.notifySell(req.symbol, qty, fillPrice, pnl ?? 0, 'PAPER');
+      return { orderId: order.id, tradeId };
+    }
 
     if (req.side === 'BUY') {
+      // Opening LONG
       await this.adjustBalance(userId, -(orderValue + charges));
-      const tradeId = await this.openPosition(order.id, req, fillPrice, charges);
-      log.info('Paper position opened', { symbol: req.symbol, qty: req.qty, avgPrice: fillPrice, charges });
-      await telegramService.notify(`📈 Paper BUY: ${req.symbol} x${req.qty} @ ₹${fillPrice}`);
+      const tradeId = await this.openPosition(order.id, req, fillPrice, charges, 'BUY');
+      log.info('[POSITION_OPEN] Long opened', { symbol: req.symbol, qty, avgPrice: fillPrice, charges });
+      await telegramService.notifyBuy(req.symbol, qty, fillPrice, 'PAPER');
       return { orderId: order.id, tradeId };
     } else {
-      const { tradeId, pnl } = await this.closePosition(order.id, req, fillPrice, charges, userId);
+      // Opening SHORT (SELL with no existing BUY position)
+      // Receive proceeds minus charges (margin accounted for via balance reduction later on cover)
       await this.adjustBalance(userId, orderValue - charges);
-      log.info('Paper position closed', { symbol: req.symbol, qty: req.qty, exitPrice: fillPrice, pnl });
-      await telegramService.notify(`📉 Paper SELL: ${req.symbol} x${req.qty} @ ₹${fillPrice} | P&L: ₹${pnl?.toFixed(2)}`);
+      const tradeId = await this.openPosition(order.id, req, fillPrice, charges, 'SELL');
+      log.info('[POSITION_OPEN] Short opened', { symbol: req.symbol, qty, avgPrice: fillPrice, charges });
+      await telegramService.notifyBuy(req.symbol, qty, fillPrice, 'PAPER');
       return { orderId: order.id, tradeId };
     }
   }
@@ -101,51 +158,63 @@ export class PaperTradingEngine {
     req: PlaceOrderRequest,
     fillPrice: number,
     charges: number,
+    side: 'BUY' | 'SELL',
   ): Promise<string> {
+    const qty = req.qty ?? 1;
     const existing = await prisma.position.findFirst({
       where: { symbol: req.symbol, mode: 'PAPER', isOpen: true },
     });
 
-    if (existing) {
-      // Pyramid into existing position
-      const totalQty = existing.qty + req.qty;
-      const avgPrice = (existing.avgPrice * existing.qty + fillPrice * req.qty) / totalQty;
+    if (existing && positionSide(existing as { side?: unknown }) === side) {
+      // Pyramid into existing same-direction position
+      const totalQty = existing.qty + qty;
+      const avgPrice = (existing.avgPrice * existing.qty + fillPrice * qty) / totalQty;
       await prisma.position.update({
         where: { id: existing.id },
         data: { qty: totalQty, avgPrice, currentPrice: fillPrice },
       });
-      log.debug('Pyramided into existing position', { symbol: req.symbol, totalQty, avgPrice });
+      log.debug('Pyramided into existing position', { symbol: req.symbol, side, totalQty, avgPrice });
     } else {
-      // Caller may pass explicit SL/target from strategy; fall back to 2%/4% defaults
-      const stopLoss = req.stopLoss ?? fillPrice * (1 - 0.02);
-      const target = req.target ?? fillPrice * (1 + 0.04);
-      await prisma.position.create({
+      // New position with appropriate defaults
+      // LONG: SL below entry, target above; SHORT: SL above entry, target below
+      const stopLoss = side === 'BUY'
+        ? (req.stopLoss ?? fillPrice * (1 - 0.02))
+        : (req.stopLoss ?? fillPrice * (1 + 0.02));
+      const target = side === 'BUY'
+        ? (req.target ?? fillPrice * (1 + 0.04))
+        : (req.target ?? fillPrice * (1 - 0.04));
+
+      // Use a raw $executeRaw workaround to pass the new `side` field
+      // that exists in DB (via migration) but not yet in Prisma generated types.
+      // Once Prisma client is regenerated (npx prisma generate), this cast can be removed.
+      await (prisma.position.create as unknown as (args: { data: Record<string, unknown> }) => Promise<unknown>)({
         data: {
-          symbol: req.symbol,
-          exchange: req.exchange,
-          qty: req.qty,
-          avgPrice: fillPrice,
+          symbol:     req.symbol,
+          exchange:   req.exchange,
+          qty,
+          avgPrice:   fillPrice,
           currentPrice: fillPrice,
           stopLoss,
           target,
-          product: req.product,
-          mode: 'PAPER',
-          strategyId: req.strategyId,
+          product:    req.product,
+          mode:       'PAPER',
+          strategyId: req.strategyId ?? null,
+          side,       // NEW FIELD — requires migration to add to DB schema
         },
       });
-      log.debug('New paper position created', { symbol: req.symbol, qty: req.qty, avgPrice: fillPrice, stopLoss, target });
+      log.debug('[POSITION_OPEN] New paper position created', { symbol: req.symbol, side, qty, avgPrice: fillPrice, stopLoss, target });
     }
 
     const trade = await prisma.trade.create({
       data: {
         orderId,
-        symbol: req.symbol,
-        exchange: req.exchange,
-        side: 'BUY',
-        qty: req.qty,
+        symbol:     req.symbol,
+        exchange:   req.exchange,
+        side,
+        qty,
         entryPrice: fillPrice,
         charges,
-        mode: 'PAPER',
+        mode:       'PAPER',
       },
     });
 
@@ -157,25 +226,38 @@ export class PaperTradingEngine {
     orderId: string,
     req: PlaceOrderRequest,
     fillPrice: number,
-    charges: number,
-    userId: string,
+    exitCharges: number,
+    _userId: string,
+    originalSide: 'BUY' | 'SELL', // the ENTRY side of the position being closed
   ): Promise<{ tradeId: string; pnl: number | null }> {
     const position = await prisma.position.findFirst({
       where: { symbol: req.symbol, mode: 'PAPER', isOpen: true },
     });
 
     let pnl: number | null = null;
+    const closeQty = req.qty ?? 1;
 
     if (position) {
-      pnl = (fillPrice - position.avgPrice) * req.qty - charges;
-      const remaining = position.qty - req.qty;
+      // Both legs' charges reduce PnL
+      const entryCharges = position.avgPrice * closeQty * BROKERAGE;
+      const totalCharges = exitCharges + entryCharges;
+
+      if (originalSide === 'BUY') {
+        // Closing LONG: profit = exitPrice - entryPrice
+        pnl = (fillPrice - position.avgPrice) * closeQty - totalCharges;
+      } else {
+        // Closing SHORT: profit = entryPrice - coverPrice
+        pnl = (position.avgPrice - fillPrice) * closeQty - totalCharges;
+      }
+
+      const remaining = position.qty - closeQty;
 
       if (remaining <= 0) {
         // DELETE the position record — closed positions live in the Trade table.
-        // Using delete instead of isOpen=false prevents the @@unique constraint
+        // Using delete instead of isOpen=false prevents the unique constraint
         // from blocking a second trade on the same symbol.
         await prisma.position.delete({ where: { id: position.id } });
-        log.debug('Paper position deleted (fully closed)', { symbol: req.symbol, pnl });
+        log.debug('[POSITION_CLOSE] Paper position deleted (fully closed)', { symbol: req.symbol, pnl, side: originalSide });
       } else {
         await prisma.position.update({
           where: { id: position.id },
@@ -188,80 +270,90 @@ export class PaperTradingEngine {
           where: { id: position.strategyId },
           data: {
             totalTrades: { increment: 1 },
-            wins: pnl > 0 ? { increment: 1 } : undefined,
-            losses: pnl <= 0 ? { increment: 1 } : undefined,
-            totalPnl: { increment: pnl },
+            wins:   (pnl ?? 0) > 0  ? { increment: 1 } : undefined,
+            losses: (pnl ?? 0) <= 0 ? { increment: 1 } : undefined,
+            totalPnl: { increment: pnl ?? 0 },
           },
         });
       }
     }
 
+    // Exit trade record — side is opposite to the entry
+    const exitSide: 'BUY' | 'SELL' = originalSide === 'BUY' ? 'SELL' : 'BUY';
     const trade = await prisma.trade.create({
       data: {
         orderId,
-        symbol: req.symbol,
-        exchange: req.exchange,
-        side: 'SELL',
-        qty: req.qty,
+        symbol:     req.symbol,
+        exchange:   req.exchange,
+        side:       exitSide,
+        qty:        closeQty,
         entryPrice: position?.avgPrice ?? fillPrice,
-        exitPrice: fillPrice,
+        exitPrice:  fillPrice,
         pnl,
-        charges,
-        mode: 'PAPER',
-        closedAt: new Date(),
+        charges:    exitCharges,
+        mode:       'PAPER',
+        closedAt:   new Date(),
       },
     });
-
-    void userId; // balance adjustment is done in placeOrder after this returns
 
     return { tradeId: trade.id, pnl };
   }
 
   // ─── Auto-exit: SL / Target / EOD squareoff ──────────────────────────────────
   // Called internally from updatePositionPrices and forceSquareoff.
-  // Creates the exit order + trade, deletes the position, credits balance.
+  // Creates the exit order + trade, deletes the position, adjusts balance.
   async autoExit(
-    position: { id: string; symbol: string; exchange: string; qty: number; avgPrice: number; product: string; strategyId: string | null },
+    position: AutoExitPosition,
     exitPrice: number,
     userId: string,
     reason: 'SL_HIT' | 'TARGET_HIT' | 'EOD_SQUAREOFF',
   ): Promise<void> {
-    log.info(`Auto-exit triggered: ${reason}`, { symbol: position.symbol, exitPrice, userId });
+    const side = positionSide(position);
+    log.info(`[${reason}] Auto-exit triggered`, { symbol: position.symbol, exitPrice, userId, side });
 
-    const charges = position.qty * exitPrice * BROKERAGE;
-    const pnl = (exitPrice - position.avgPrice) * position.qty - charges;
+    const exitCharges  = position.qty * exitPrice * BROKERAGE;
+    const entryCharges = position.avgPrice * position.qty * BROKERAGE;
+    const totalCharges = exitCharges + entryCharges;
+
+    // Direction-aware PnL — both legs' charges included
+    const pnl = side === 'BUY'
+      ? (exitPrice - position.avgPrice) * position.qty - totalCharges
+      : (position.avgPrice - exitPrice) * position.qty - totalCharges;
+
+    // For LONG auto-exit we SELL; for SHORT auto-exit we BUY back
+    const exitOrderSide: 'BUY' | 'SELL' = side === 'BUY' ? 'SELL' : 'BUY';
 
     const order = await prisma.order.create({
       data: {
         userId,
-        symbol: position.symbol,
-        exchange: position.exchange,
-        side: 'SELL',
-        qty: position.qty,
-        price: exitPrice,
-        orderType: 'MARKET',
-        product: position.product,
-        status: 'FILLED',
-        mode: 'PAPER',
+        symbol:     position.symbol,
+        exchange:   position.exchange,
+        side:       exitOrderSide,
+        qty:        position.qty,
+        price:      exitPrice,
+        orderType:  'MARKET',
+        product:    position.product,
+        status:     'FILLED',
+        mode:       'PAPER',
         strategyId: position.strategyId,
-        tag: reason,
-        filledAt: new Date(),
+        tag:        reason,
+        filledAt:   new Date(),
       },
     });
 
     await prisma.trade.create({
       data: {
-        orderId: order.id,
-        symbol: position.symbol,
-        exchange: position.exchange,
-        side: 'SELL',
-        qty: position.qty,
+        orderId:    order.id,
+        symbol:     position.symbol,
+        exchange:   position.exchange,
+        side:       exitOrderSide,
+        qty:        position.qty,
         entryPrice: position.avgPrice,
         exitPrice,
         pnl,
-        charges,
-        mode: 'PAPER',
-        closedAt: new Date(),
+        charges:    exitCharges,
+        mode:       'PAPER',
+        closedAt:   new Date(),
       },
     });
 
@@ -272,20 +364,31 @@ export class PaperTradingEngine {
         where: { id: position.strategyId },
         data: {
           totalTrades: { increment: 1 },
-          wins: pnl > 0 ? { increment: 1 } : undefined,
+          wins:   pnl > 0  ? { increment: 1 } : undefined,
           losses: pnl <= 0 ? { increment: 1 } : undefined,
           totalPnl: { increment: pnl },
         },
       });
     }
 
-    await this.adjustBalance(userId, position.qty * exitPrice - charges);
+    // Balance adjustment:
+    //   LONG exit: receive proceeds - exit charges
+    //   SHORT cover: pay cover cost + exit charges
+    if (side === 'BUY') {
+      await this.adjustBalance(userId, position.qty * exitPrice - exitCharges);
+    } else {
+      await this.adjustBalance(userId, -(position.qty * exitPrice + exitCharges));
+    }
 
-    const emoji = reason === 'SL_HIT' ? '⛔' : reason === 'TARGET_HIT' ? '🎯' : '🔔';
-    log.info(`Auto-exit complete`, { reason, symbol: position.symbol, exitPrice, pnl });
-    await telegramService.notify(
-      `${emoji} ${reason}: ${position.symbol} x${position.qty} @ ₹${exitPrice.toFixed(2)} | P&L: ₹${pnl.toFixed(2)}`,
-    );
+    if (reason === 'SL_HIT') {
+      await telegramService.notifySlHit(position.symbol, exitPrice, pnl);
+    } else if (reason === 'TARGET_HIT') {
+      await telegramService.notifyTargetHit(position.symbol, exitPrice, pnl);
+    } else {
+      await telegramService.notifyForceExit(position.symbol, reason);
+    }
+
+    log.info(`[${reason}] Auto-exit complete`, { symbol: position.symbol, exitPrice, pnl, side });
   }
 
   // ─── Resolve userId for a position (for auto-exit) ───────────────────────────
@@ -312,31 +415,49 @@ export class PaperTradingEngine {
       const ltp = quotes[pos.symbol];
       if (!ltp) continue;
 
+      const side = positionSide(pos as { side?: unknown });
+
       // Check SL/target BEFORE writing MTM so we don't update a position
-      // we're about to delete.
-      if (pos.stopLoss && ltp <= pos.stopLoss) {
-        log.warn('SL Hit', { symbol: pos.symbol, ltp, stopLoss: pos.stopLoss });
+      // we're about to delete. Direction-aware logic for LONG vs SHORT.
+      const slHit = pos.stopLoss !== null && (
+        side === 'BUY'
+          ? ltp <= pos.stopLoss   // LONG SL: price falls to or below SL
+          : ltp >= pos.stopLoss   // SHORT SL: price rises to or above SL
+      );
+
+      const targetHit = pos.target !== null && (
+        side === 'BUY'
+          ? ltp >= pos.target     // LONG target: price rises to or above target
+          : ltp <= pos.target     // SHORT target: price falls to or below target
+      );
+
+      if (slHit) {
+        log.warn('[SL_HIT]', { symbol: pos.symbol, ltp, stopLoss: pos.stopLoss, side });
         const userId = await this.getPositionUserId(pos.strategyId);
         if (userId) {
-          await this.autoExit(pos, ltp, userId, 'SL_HIT');
+          await this.autoExit(pos as AutoExitPosition, ltp, userId, 'SL_HIT');
         } else {
           log.error('SL triggered but no userId found — cannot auto-exit', { symbol: pos.symbol });
         }
         continue;
       }
 
-      if (pos.target && ltp >= pos.target) {
-        log.info('Target Hit', { symbol: pos.symbol, ltp, target: pos.target });
+      if (targetHit) {
+        log.info('[TARGET_HIT]', { symbol: pos.symbol, ltp, target: pos.target, side });
         const userId = await this.getPositionUserId(pos.strategyId);
         if (userId) {
-          await this.autoExit(pos, ltp, userId, 'TARGET_HIT');
+          await this.autoExit(pos as AutoExitPosition, ltp, userId, 'TARGET_HIT');
         } else {
           log.error('Target hit but no userId found — cannot auto-exit', { symbol: pos.symbol });
         }
         continue;
       }
 
-      const unrealizedPnl = (ltp - pos.avgPrice) * pos.qty;
+      // Direction-aware unrealized PnL
+      const unrealizedPnl = side === 'BUY'
+        ? (ltp - pos.avgPrice) * pos.qty
+        : (pos.avgPrice - ltp) * pos.qty;
+
       await prisma.position.update({
         where: { id: pos.id },
         data: { currentPrice: ltp, unrealizedPnl },
@@ -346,7 +467,7 @@ export class PaperTradingEngine {
 
   // ─── Force squareoff all open paper positions (15:25 EOD) ───────────────────
   async forceSquareoff(): Promise<void> {
-    log.info('Force squareoff initiated — closing all open PAPER positions');
+    log.info('[FORCED_EXIT] Force squareoff initiated — closing all open PAPER positions');
     const openPositions = await prisma.position.findMany({ where: { mode: 'PAPER', isOpen: true } });
     if (openPositions.length === 0) {
       log.info('No open paper positions to squareoff');
@@ -355,14 +476,14 @@ export class PaperTradingEngine {
     for (const pos of openPositions) {
       const userId = await this.getPositionUserId(pos.strategyId);
       if (!userId) {
-        log.error('Squareoff skipped — no userId found', { symbol: pos.symbol });
+        log.error('[FORCED_EXIT] Squareoff skipped — no userId found', { symbol: pos.symbol });
         continue;
       }
       // Use currentPrice as best available exit price
       const exitPrice = pos.currentPrice > 0 ? pos.currentPrice : pos.avgPrice;
-      await this.autoExit(pos, exitPrice, userId, 'EOD_SQUAREOFF');
+      await this.autoExit(pos as AutoExitPosition, exitPrice, userId, 'EOD_SQUAREOFF');
     }
-    log.info(`Force squareoff complete — ${openPositions.length} positions closed`);
+    log.info(`[FORCED_EXIT] Force squareoff complete — ${openPositions.length} positions closed`);
   }
 
   // ─── Daily summary ───────────────────────────────────────────────────────────
