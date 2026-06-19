@@ -155,6 +155,16 @@ export class WebSocketService {
 
       this.upstoxFeed.on('message', async (data: Buffer) => {
         try {
+          // Detect binary (protobuf) vs JSON — Upstox sends JSON-encoded feed data.
+          // 0x7b = '{', 0x5b = '['. Any other first byte means binary/protobuf.
+          if (data.length > 0 && data[0] !== 0x7b && data[0] !== 0x5b) {
+            log.warn('[WS_FEED] Binary frame received — Upstox may be sending protobuf, not JSON', {
+              bytes: data.length,
+              first4: data.slice(0, 4).toString('hex'),
+            });
+            return;
+          }
+
           const msg = JSON.parse(data.toString()) as {
             feeds?: Record<string, { ff?: { marketFF?: { ltpc?: { ltp: number } } } }>;
           };
@@ -172,9 +182,21 @@ export class WebSocketService {
             }
           }
 
+          const quoteCount = Object.keys(quotes).length;
+          if (quoteCount > 0) {
+            log.debug('[WS_FEED_TICK] Quotes received', { count: quoteCount });
+          }
+
           // Update paper positions mark-to-market
-          await paperEngine.updatePositionPrices(quotes).catch(() => void 0);
-        } catch { /* malformed frame */ }
+          await paperEngine.updatePositionPrices(quotes).catch((err) =>
+            log.error('[WS_FEED_TICK] updatePositionPrices failed', { err }),
+          );
+        } catch (err) {
+          log.error('[WS_FEED] Failed to process message', {
+            err: err instanceof Error ? err.message : String(err),
+            bytes: data.length,
+          });
+        }
       });
 
       this.upstoxFeed.on('close', (code, reason) => {

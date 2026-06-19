@@ -4,6 +4,7 @@ import { telegramService } from '../notifications/telegram.service';
 import { AppError } from '../../middleware/errorHandler';
 import { PlaceOrderRequest } from '../../types';
 import { logger } from '../../utils/logger';
+import { instrumentMappingService } from '../market-data/instrument-mapping';
 
 const log = logger.child({ category: 'PaperEngine' });
 const BROKERAGE = 0.0003; // 0.03% per leg
@@ -409,11 +410,24 @@ export class PaperTradingEngine {
 
   // ─── Mark-to-market update + SL/Target enforcement ───────────────────────────
   async updatePositionPrices(quotes: Record<string, number>): Promise<void> {
+    const quoteCount = Object.keys(quotes).length;
+    if (quoteCount === 0) return;
+
     const openPositions = await prisma.position.findMany({ where: { mode: 'PAPER', isOpen: true } });
+    if (openPositions.length === 0) return;
+
+    log.debug('[MTM_TICK]', { quoteCount, positions: openPositions.length });
 
     for (const pos of openPositions) {
-      const ltp = quotes[pos.symbol];
-      if (!ltp) continue;
+      // pos.symbol may be stored in any format ("RELIANCE", "NSE_EQ:RELIANCE", instrument key).
+      // quotes is always keyed by instrument key ("NSE_EQ|INE002A01018") from the Upstox feed.
+      // Normalize so both sides use the same format.
+      const instrumentKey = instrumentMappingService.getInstrumentKey(pos.symbol);
+      const ltp = quotes[instrumentKey] ?? quotes[pos.symbol];
+      if (!ltp) {
+        log.debug('[MTM_SKIP] No quote for position', { symbol: pos.symbol, instrumentKey });
+        continue;
+      }
 
       const side = positionSide(pos as { side?: unknown });
 

@@ -13,6 +13,7 @@ import { ThreeCandleMomentumStrategy } from './three-candle-momentum.strategy';
 import { BaseStrategy, StrategyConfig } from './base.strategy';
 import { Candle, StrategySignal, StrategyRiskConfig, StrategyParams } from '../../types';
 import { logger } from '../../utils/logger';
+import { instrumentMappingService } from '../market-data/instrument-mapping';
 
 const log = logger.child({ category: 'StrategyEngine' });
 
@@ -305,10 +306,12 @@ export class StrategyEngine {
   }
 
   // ─── Price tick (from WebSocket) ─────────────────────────────────────────────
+  // `symbol` arrives as an Upstox instrument key ("NSE_EQ|INE002A01018").
+  // cfg.symbol may be stored in any supported format — normalize before comparing.
   onPriceTick(symbol: string, price: number): void {
     void price;
     Array.from(this.configs.values())
-      .filter((cfg) => cfg.symbol === symbol && cfg.isActive)
+      .filter((cfg) => instrumentMappingService.getInstrumentKey(cfg.symbol) === symbol && cfg.isActive)
       .forEach((cfg) => {
         void this.runStrategy(cfg.id).catch(() => void 0);
       });
