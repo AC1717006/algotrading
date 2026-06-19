@@ -22,8 +22,9 @@ export class TradingService {
     userId: string,
     req: PlaceOrderRequest,
     currentPrice: number,
+    modeOverride?: TradingMode,
   ): Promise<{ orderId: string; mode: TradingMode }> {
-    const mode = await this.getCurrentMode();
+    const mode = modeOverride ?? await this.getCurrentMode();
     let result: { orderId: string };
 
     if (mode === 'PAPER') {

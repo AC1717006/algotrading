@@ -79,6 +79,7 @@ enum StrategyType {
   MACD
   BREAKOUT
   CUSTOM
+  THREE_CANDLE_MOMENTUM
 }
 
 enum TradingMode {
@@ -194,7 +195,7 @@ model Position {
 
   strategy Strategy? @relation(fields: [strategyId], references: [id], onDelete: SetNull)
 
-  @@unique([symbol, mode, isOpen], name: "symbol_mode_open")
+  @@index([symbol, mode, isOpen])
   @@index([isOpen])
   @@index([mode])
   @@index([strategyId])

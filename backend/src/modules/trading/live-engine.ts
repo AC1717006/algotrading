@@ -248,28 +248,38 @@ export class LiveTradingEngine {
       const livePositions = await upstoxClient.getPositions() as UpstoxPosition[];
 
       for (const lp of livePositions) {
+        const existing = await prisma.position.findFirst({
+          where: { symbol: lp.instrument_token, mode: 'LIVE', isOpen: true },
+        });
+
         if (lp.quantity === 0) {
-          await prisma.position.updateMany({
-            where: { symbol: lp.instrument_token, mode: 'LIVE', isOpen: true },
-            data: { isOpen: false, closedAt: new Date(), currentPrice: lp.last_price },
-          });
+          // Broker closed the position — delete our local record so a new trade
+          // on the same symbol can open again without hitting a duplicate constraint.
+          if (existing) {
+            await prisma.position.delete({ where: { id: existing.id } });
+          }
           continue;
         }
 
-        await prisma.position.upsert({
-          where: { symbol_mode_open: { symbol: lp.instrument_token, mode: 'LIVE', isOpen: true } },
-          update: { qty: lp.quantity, currentPrice: lp.last_price, unrealizedPnl: lp.pnl },
-          create: {
-            symbol: lp.instrument_token,
-            exchange: lp.exchange,
-            qty: lp.quantity,
-            avgPrice: lp.average_price,
-            currentPrice: lp.last_price,
-            unrealizedPnl: lp.pnl,
-            product: lp.product,
-            mode: 'LIVE',
-          },
-        });
+        if (existing) {
+          await prisma.position.update({
+            where: { id: existing.id },
+            data: { qty: lp.quantity, currentPrice: lp.last_price, unrealizedPnl: lp.pnl },
+          });
+        } else {
+          await prisma.position.create({
+            data: {
+              symbol: lp.instrument_token,
+              exchange: lp.exchange,
+              qty: lp.quantity,
+              avgPrice: lp.average_price,
+              currentPrice: lp.last_price,
+              unrealizedPnl: lp.pnl,
+              product: lp.product,
+              mode: 'LIVE',
+            },
+          });
+        }
       }
     } catch (err) {
       log.error('Failed to sync live positions', { err });

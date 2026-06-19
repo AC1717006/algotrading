@@ -17,7 +17,20 @@ interface Strategy {
   isActive: boolean;
   mode: string;
   parameters: Record<string, unknown>;
-  riskSettings: Record<string, unknown>;
+  riskConfig: Record<string, unknown>;
+  totalTrades: number;
+  wins: number;
+  losses: number;
+  totalPnl: number;
+}
+
+function formatPnl(n: number): string {
+  return `${n >= 0 ? '+' : ''}₹${Math.abs(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function winRate(s: Strategy): string {
+  if (!s.totalTrades) return '—';
+  return `${((s.wins / s.totalTrades) * 100).toFixed(1)}%`;
 }
 
 export default function StrategiesPage() {
@@ -83,6 +96,7 @@ export default function StrategiesPage() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {strategies?.map((strategy) => (
           <div key={strategy.id} className={`card transition-all ${selected?.id === strategy.id ? 'ring-1 ring-brand-500' : ''}`}>
+            {/* Header */}
             <div className="flex items-start justify-between mb-3">
               <div>
                 <h3 className="font-semibold text-white text-sm">{strategy.name}</h3>
@@ -90,14 +104,44 @@ export default function StrategiesPage() {
               </div>
               <div className="flex items-center gap-2">
                 <span className={strategy.mode === 'LIVE' ? 'badge-red' : 'badge-blue'}>{strategy.mode}</span>
-                <span className={strategy.isActive ? 'badge-green' : 'badge-yellow'}>{strategy.isActive ? 'ON' : 'OFF'}</span>
+                <span className={strategy.isActive ? 'badge-green' : 'badge-yellow'}>{strategy.isActive ? 'RUNNING' : 'STOPPED'}</span>
               </div>
             </div>
 
+            {/* Symbol */}
             <div className="text-xs text-gray-400 mb-3">
-              Symbol: {strategy.symbol}
+              Symbol: <span className="text-white font-mono">{strategy.symbol}</span>
             </div>
 
+            {/* Performance stats */}
+            <div className="grid grid-cols-4 gap-2 mb-3 bg-gray-900/50 rounded-lg p-2">
+              <div className="text-center">
+                <p className="text-gray-500 text-xs">Trades</p>
+                <p className="text-white font-bold text-sm">{strategy.totalTrades ?? 0}</p>
+              </div>
+              <div className="text-center">
+                <p className="text-gray-500 text-xs">Win Rate</p>
+                <p className={`font-bold text-sm ${(strategy.wins ?? 0) > (strategy.losses ?? 0) ? 'text-green-400' : 'text-gray-400'}`}>
+                  {winRate(strategy)}
+                </p>
+              </div>
+              <div className="text-center">
+                <p className="text-gray-500 text-xs">W/L</p>
+                <p className="text-white font-bold text-sm">
+                  <span className="text-green-400">{strategy.wins ?? 0}</span>
+                  <span className="text-gray-600">/</span>
+                  <span className="text-red-400">{strategy.losses ?? 0}</span>
+                </p>
+              </div>
+              <div className="text-center">
+                <p className="text-gray-500 text-xs">P&L</p>
+                <p className={`font-bold text-sm ${(strategy.totalPnl ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                  {formatPnl(strategy.totalPnl ?? 0)}
+                </p>
+              </div>
+            </div>
+
+            {/* Actions */}
             <div className="flex gap-2">
               <button
                 onClick={() => strategy.isActive ? disableMutation.mutate(strategy.id) : enableMutation.mutate(strategy.id)}
@@ -114,12 +158,12 @@ export default function StrategiesPage() {
               </button>
             </div>
 
-            {/* Parameters panel */}
+            {/* Parameters / risk / watchlist panel */}
             {selected?.id === strategy.id && (
               <div className="mt-4 pt-4 border-t border-gray-800 grid grid-cols-2 gap-3 text-xs">
                 <div>
                   <p className="text-gray-500 mb-1.5">Parameters</p>
-                  {Object.entries(strategy.parameters).map(([k, v]) => (
+                  {Object.entries(strategy.parameters ?? {}).map(([k, v]) => (
                     <div key={k} className="flex justify-between py-0.5">
                       <span className="text-gray-400">{k}</span>
                       <span className="text-white font-mono">{String(v)}</span>
@@ -127,8 +171,8 @@ export default function StrategiesPage() {
                   ))}
                 </div>
                 <div>
-                  <p className="text-gray-500 mb-1.5">Risk Settings</p>
-                  {Object.entries(strategy.riskSettings).map(([k, v]) => (
+                  <p className="text-gray-500 mb-1.5">Risk Config</p>
+                  {Object.entries(strategy.riskConfig ?? {}).map(([k, v]) => (
                     <div key={k} className="flex justify-between py-0.5">
                       <span className="text-gray-400">{k}</span>
                       <span className="text-white font-mono">{String(v)}</span>

@@ -37,7 +37,7 @@ router.post(
   auditLog('CREATE_STRATEGY', 'strategies'),
   [
     body('name').notEmpty(),
-    body('type').isIn(['EMA_CROSSOVER', 'RSI', 'MACD', 'BREAKOUT', 'CUSTOM']),
+    body('type').isIn(['EMA_CROSSOVER', 'RSI', 'MACD', 'BREAKOUT', 'CUSTOM', 'THREE_CANDLE_MOMENTUM']),
     body('symbol').notEmpty(),
     body('exchange').notEmpty(),
     body('timeframe').notEmpty(),

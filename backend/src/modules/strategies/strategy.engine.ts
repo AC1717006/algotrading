@@ -2,27 +2,27 @@ import cron from 'node-cron';
 import { prisma, redis } from '../../database/client';
 import { upstoxClient } from '../broker/upstox.client';
 import { tradingService } from '../trading/trading.service';
+import { paperEngine } from '../trading/paper-engine';
 import { telegramService } from '../notifications/telegram.service';
 import { EMACrossoverStrategy } from './ema-crossover.strategy';
 import { RSIStrategy } from './rsi.strategy';
 import { MACDStrategy } from './macd.strategy';
 import { BreakoutStrategy } from './breakout.strategy';
 import { CustomStrategy } from './custom.strategy';
+import { ThreeCandleMomentumStrategy } from './three-candle-momentum.strategy';
 import { BaseStrategy, StrategyConfig } from './base.strategy';
 import { Candle, StrategySignal, StrategyRiskConfig, StrategyParams } from '../../types';
 import { logger } from '../../utils/logger';
 
 const log = logger.child({ category: 'StrategyEngine' });
 
-type StrategyType = 'EMA_CROSSOVER' | 'RSI' | 'MACD' | 'BREAKOUT' | 'CUSTOM';
+type StrategyType = 'EMA_CROSSOVER' | 'RSI' | 'MACD' | 'BREAKOUT' | 'CUSTOM' | 'THREE_CANDLE_MOMENTUM';
 
-const STRATEGY_CRON = '*/5 9-15 * * 1-5';
+const STRATEGY_CRON    = '*/5 9-15 * * 1-5';
+const SQUAREOFF_CRON   = '25 15 * * 1-5';
 const CRON_INTERVAL_MS = 5 * 60 * 1000;
-
-// Lock TTL is intentionally shorter than the cron interval so a crashed
-// instance can never permanently strand the lock and block future ticks.
-const LOCK_TTL_SECONDS = 270; // 4.5 minutes (< 5 minute cron interval)
-const LOCK_PREFIX = 'lock:strategy-run:';
+const LOCK_TTL_SECONDS = 270; // 4.5 min — shorter than cron interval to avoid stranded locks
+const LOCK_PREFIX      = 'lock:strategy-run:';
 
 function aggregateCandles(candles: Candle[], groupSize: number): Candle[] {
   const result: Candle[] = [];
@@ -42,16 +42,18 @@ function aggregateCandles(candles: Candle[], groupSize: number): Candle[] {
 }
 
 export class StrategyEngine {
-  private jobs = new Map<string, cron.ScheduledTask>();
+  private jobs    = new Map<string, cron.ScheduledTask>();
   private configs = new Map<string, StrategyConfig & { isActive: boolean }>();
+  private squareoffJob: cron.ScheduledTask | null = null;
 
   private buildStrategy(cfg: StrategyConfig): BaseStrategy {
     const map: Record<StrategyType, new (c: StrategyConfig) => BaseStrategy> = {
-      EMA_CROSSOVER: EMACrossoverStrategy,
-      RSI:           RSIStrategy,
-      MACD:          MACDStrategy,
-      BREAKOUT:      BreakoutStrategy,
-      CUSTOM:        CustomStrategy,
+      EMA_CROSSOVER:          EMACrossoverStrategy,
+      RSI:                    RSIStrategy,
+      MACD:                   MACDStrategy,
+      BREAKOUT:               BreakoutStrategy,
+      CUSTOM:                 CustomStrategy,
+      THREE_CANDLE_MOMENTUM:  ThreeCandleMomentumStrategy,
     };
     const Cls = map[cfg.type as StrategyType];
     if (!Cls) throw new Error(`Unknown strategy type: ${cfg.type}`);
@@ -59,22 +61,18 @@ export class StrategyEngine {
   }
 
   /**
-   * Distributed lock so that only one PM2 cluster instance executes a given
-   * strategy's evaluation within a given cron interval. The lock key is
-   * bucketed by the current 5-minute window, so it self-expires and never
-   * needs to be explicitly released — every instance racing for the same
-   * bucket will get a fresh key on the next tick.
+   * Distributed lock — only one PM2 cluster instance runs each strategy
+   * per 5-minute cron bucket. TTL < cron interval so a crashed instance
+   * never permanently blocks future ticks.
    */
   private async acquireRunLock(strategyId: string): Promise<boolean> {
     const bucket = Math.floor(Date.now() / CRON_INTERVAL_MS);
-    const key = `${LOCK_PREFIX}${strategyId}:${bucket}`;
+    const key    = `${LOCK_PREFIX}${strategyId}:${bucket}`;
     try {
       const result = await redis.set(key, `${process.pid}`, 'EX', LOCK_TTL_SECONDS, 'NX');
       return result === 'OK';
     } catch (err) {
-      // If Redis is unreachable, fail open on a single instance only by
-      // logging loudly — duplicate execution is preferable to no execution,
-      // but this should be alerted on immediately.
+      // Redis unavailable — fail open on single instance, alert loudly.
       log.error('Redis lock acquisition failed — proceeding without lock', { strategyId, err });
       return true;
     }
@@ -82,51 +80,66 @@ export class StrategyEngine {
 
   private async runStrategy(strategyId: string): Promise<void> {
     const masterSwitch = await prisma.setting.findUnique({ where: { key: 'strategies_enabled' } });
-    if (masterSwitch?.value === 'false') return;
+    if (masterSwitch?.value === 'false') {
+      log.debug('Strategy engine master switch is OFF');
+      return;
+    }
 
     const dbRow = await prisma.strategy.findUnique({ where: { id: strategyId } });
     if (!dbRow || !dbRow.isActive) return;
 
-    // Ensure this strategy only runs once per interval across all PM2 cluster
-    // instances (fixes double order placement under cluster mode).
     const acquired = await this.acquireRunLock(strategyId);
     if (!acquired) {
-      log.debug('Skipping strategy run — lock held by another instance', { strategyId, pid: process.pid });
+      log.debug('Skipping — lock held by another instance', { strategyId, pid: process.pid });
       return;
     }
 
     const cfg: StrategyConfig = {
-      id: dbRow.id,
-      name: dbRow.name,
-      type: dbRow.type,
-      symbol: dbRow.symbol,
-      exchange: dbRow.exchange,
-      timeframe: dbRow.timeframe,
+      id:         dbRow.id,
+      name:       dbRow.name,
+      type:       dbRow.type,
+      symbol:     dbRow.symbol,
+      exchange:   dbRow.exchange,
+      timeframe:  dbRow.timeframe,
       parameters: dbRow.parameters as StrategyParams,
       riskConfig: dbRow.riskConfig as unknown as StrategyRiskConfig,
-      mode: dbRow.mode as 'PAPER' | 'LIVE',
+      mode:       dbRow.mode as 'PAPER' | 'LIVE',
     };
+
+    log.info('Strategy running', { name: cfg.name, symbol: cfg.symbol, type: cfg.type, mode: cfg.mode });
 
     const strategy = this.buildStrategy(cfg);
 
-    // Fetch last 50 1minute candles and aggregate into 5minute candles
+    // ── Skip if a position for this symbol is already open ───────────────────
+    const existingPosition = await prisma.position.findFirst({
+      where: { symbol: cfg.symbol, mode: cfg.mode, isOpen: true },
+    });
+    if (existingPosition) {
+      log.debug('Signal ignored — position already open', {
+        strategy: cfg.name, symbol: cfg.symbol, positionId: existingPosition.id,
+      });
+      return;
+    }
+
+    // ── Fetch and aggregate candles ──────────────────────────────────────────
     let candles: Candle[] = [];
     try {
       const raw = await upstoxClient.getIntradayCandles(cfg.symbol, '1minute');
       const oneMinCandles = raw
         .map((c) => ({
           timestamp: new Date(c[0] as string).getTime(),
-          open: c[1] as number,
-          high: c[2] as number,
-          low: c[3] as number,
-          close: c[4] as number,
-          volume: c[5] as number,
+          open:      c[1] as number,
+          high:      c[2] as number,
+          low:       c[3] as number,
+          close:     c[4] as number,
+          volume:    c[5] as number,
         }))
         .sort((a, b) => a.timestamp - b.timestamp)
         .slice(-50);
       candles = aggregateCandles(oneMinCandles, 5);
+      log.info('Candles fetched', { strategy: cfg.name, oneMin: oneMinCandles.length, fiveMin: candles.length });
     } catch (err) {
-      log.error('Failed to fetch candles', { strategyId, err });
+      log.error('Failed to fetch candles', { strategyId, symbol: cfg.symbol, err });
       return;
     }
 
@@ -136,71 +149,85 @@ export class StrategyEngine {
     }
 
     const currentPrice = candles[candles.length - 1]!.close;
+    log.info('Indicators calculated', { strategy: cfg.name, currentPrice, candleCount: candles.length });
+
     const signal: StrategySignal = strategy.analyze(candles, currentPrice);
 
     if (signal.type === 'HOLD') {
-      log.debug('Strategy HOLD', { name: cfg.name, reason: signal.reason });
+      log.debug('Signal: HOLD', { name: cfg.name, reason: signal.reason });
       return;
     }
+
+    log.info('Signal generated', {
+      strategy: cfg.name, signal: signal.type, price: signal.price,
+      sl: signal.stopLoss, target: signal.target, reason: signal.reason,
+    });
 
     // Persist signal
     const dbSignal = await prisma.signal.create({
       data: {
         strategyId: cfg.id,
-        symbol: cfg.symbol,
-        action: signal.type,
-        price: signal.price,
-        reason: signal.reason,
+        symbol:     cfg.symbol,
+        action:     signal.type,
+        price:      signal.price,
+        reason:     signal.reason,
         indicators: signal.indicators as any,
       },
     });
 
-    log.info('Signal generated', { strategy: cfg.name, signal: signal.type, price: signal.price });
-
-    // Telegram notification
     await telegramService.notify(
       `📊 *${signal.type}* Signal — ${cfg.name}\n` +
       `Symbol: ${cfg.symbol}\n` +
       `Price: ₹${signal.price.toFixed(2)}\n` +
       `Reason: ${signal.reason}\n` +
-      `Stop Loss: ₹${signal.stopLoss?.toFixed(2)}\n` +
-      `Target: ₹${signal.target?.toFixed(2)}`,
+      `Stop Loss: ₹${signal.stopLoss?.toFixed(2) ?? 'N/A'}\n` +
+      `Target: ₹${signal.target?.toFixed(2) ?? 'N/A'}`,
     );
 
-    // Find an active trader/admin to attribute the order to
+    // Find active trader/admin to attribute the order to
     const user = await prisma.user.findFirst({
       where: { role: { in: ['ADMIN', 'TRADER'] }, isActive: true },
       orderBy: { createdAt: 'asc' },
     });
-    if (!user) { log.warn('No active trader found — signal not executed'); return; }
+    if (!user) {
+      log.warn('No active trader found — signal not executed', { strategy: cfg.name });
+      return;
+    }
 
-    // Check position sizing
     const maxValue = cfg.riskConfig.maxPositionValue;
     const qty = Math.max(1, Math.floor(maxValue / signal.price));
 
     try {
-      await tradingService.placeOrder(user.id, {
-        symbol: cfg.symbol,
-        exchange: cfg.exchange,
-        instrumentToken: cfg.symbol,
-        side: signal.type as 'BUY' | 'SELL',
-        qty,
-        orderType: 'MARKET',
-        product: 'MIS',
-        stopLoss: signal.stopLoss,
-        target: signal.target,
-        strategyId: cfg.id,
-        tag: `STRATEGY_${cfg.type}`,
-      }, signal.price);
+      await tradingService.placeOrder(
+        user.id,
+        {
+          symbol:          cfg.symbol,
+          exchange:        cfg.exchange,
+          instrumentToken: cfg.symbol,
+          side:            signal.type as 'BUY' | 'SELL',
+          qty,
+          orderType:       'MARKET',
+          product:         'MIS',
+          stopLoss:        signal.stopLoss,
+          target:          signal.target,
+          strategyId:      cfg.id,
+          tag:             `STRATEGY_${cfg.type}`,
+        },
+        signal.price,
+        cfg.mode, // <— use strategy-level mode, not global setting
+      );
 
       await prisma.signal.update({ where: { id: dbSignal.id }, data: { isExecuted: true } });
-      log.info('Strategy order placed', { strategy: cfg.name, qty, price: signal.price });
+      log.info('Strategy order placed', {
+        strategy: cfg.name, side: signal.type, qty, price: signal.price, mode: cfg.mode,
+      });
     } catch (err) {
       log.error('Strategy order failed', { strategy: cfg.name, err });
       await telegramService.notify(`❌ Order failed for ${cfg.name}: ${(err as Error).message}`);
     }
   }
 
+  // ─── Start / Stop individual strategy ────────────────────────────────────────
   async startStrategy(strategyId: string): Promise<void> {
     if (this.jobs.has(strategyId)) {
       log.warn('Strategy already running', { strategyId });
@@ -218,17 +245,18 @@ export class StrategyEngine {
 
     this.jobs.set(strategyId, job);
     this.configs.set(strategyId, {
-      id: row.id,
-      name: row.name,
-      type: row.type,
-      symbol: row.symbol,
-      exchange: row.exchange,
-      timeframe: row.timeframe,
+      id:         row.id,
+      name:       row.name,
+      type:       row.type,
+      symbol:     row.symbol,
+      exchange:   row.exchange,
+      timeframe:  row.timeframe,
       parameters: row.parameters as StrategyParams,
       riskConfig: row.riskConfig as unknown as StrategyRiskConfig,
-      mode: row.mode as 'PAPER' | 'LIVE',
-      isActive: true,
+      mode:       row.mode as 'PAPER' | 'LIVE',
+      isActive:   true,
     });
+
     log.info('Strategy started', { name: row.name, cron: STRATEGY_CRON });
   }
 
@@ -242,11 +270,26 @@ export class StrategyEngine {
     }
   }
 
+  // ─── Force squareoff all open paper positions at 15:25 ───────────────────────
+  private startSquareoffJob(): void {
+    if (this.squareoffJob) return;
+    this.squareoffJob = cron.schedule(
+      SQUAREOFF_CRON,
+      async () => {
+        log.info('EOD force squareoff cron triggered');
+        try {
+          await paperEngine.forceSquareoff();
+        } catch (err) {
+          log.error('Force squareoff failed', { err });
+        }
+      },
+      { scheduled: true, timezone: 'Asia/Kolkata' },
+    );
+    log.info('EOD squareoff job scheduled', { cron: SQUAREOFF_CRON });
+  }
+
+  // ─── Price tick (from WebSocket) ─────────────────────────────────────────────
   onPriceTick(symbol: string, price: number): void {
-    // Run strategies that have this symbol when live price arrives.
-    // runStrategy() is itself guarded by the per-bucket distributed lock, so
-    // high-frequency ticks across many WebSocket connections/instances will
-    // still only trigger one evaluation per strategy per cron interval.
     void price;
     Array.from(this.configs.values())
       .filter((cfg) => cfg.symbol === symbol && cfg.isActive)
@@ -255,16 +298,21 @@ export class StrategyEngine {
       });
   }
 
+  // ─── Start all active strategies on boot ─────────────────────────────────────
   async startAll(): Promise<void> {
     const active = await prisma.strategy.findMany({ where: { isActive: true } });
     await Promise.all(active.map((s) => this.startStrategy(s.id).catch((e) => log.error('Start error', { id: s.id, e }))));
+    this.startSquareoffJob();
     log.info(`Strategy engine: ${active.length} strategies started`);
   }
 
   async stopAll(): Promise<void> {
-    for (const [id, job] of this.jobs) {
-      job.stop();
-      this.jobs.delete(id);
+    for (const [, job] of this.jobs) job.stop();
+    this.jobs.clear();
+    this.configs.clear();
+    if (this.squareoffJob) {
+      this.squareoffJob.stop();
+      this.squareoffJob = null;
     }
     log.info('All strategies stopped');
   }
