@@ -178,6 +178,7 @@ model Position {
   id             String      @id @default(uuid())
   symbol         String
   exchange       String      @default("NSE")
+  side           OrderSide   @default(BUY)
   qty            Int
   avgPrice       Float       @map("avg_price")
   currentPrice   Float       @map("current_price")
@@ -200,6 +201,28 @@ model Position {
   @@index([mode])
   @@index([strategyId])
   @@map("positions")
+}
+
+// ─────────────────────────────────────────────────────────────────
+// 10. BACKTESTS
+// ─────────────────────────────────────────────────────────────────
+model Backtest {
+  id           String   @id @default(uuid())
+  strategyType String   @map("strategy_type")
+  symbol       String
+  exchange     String   @default("NSE")
+  fromDate     DateTime @map("from_date")
+  toDate       DateTime @map("to_date")
+  capital      Float
+  parameters   Json
+  result       Json
+  metrics      Json
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([strategyType])
+  @@index([symbol])
+  @@index([createdAt])
+  @@map("backtests")
 }
 
 // ─────────────────────────────────────────────────────────────────
