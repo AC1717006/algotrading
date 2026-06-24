@@ -292,10 +292,12 @@ export class PaperTradingEngine {
         exitPrice:  fillPrice,
         pnl,
         charges:    exitCharges,
+        stopLoss:   position?.stopLoss ?? null,
+        target:     position?.target ?? null,
         mode:       'PAPER',
         closedAt:   new Date(),
       },
-    });
+    } as Parameters<typeof prisma.trade.create>[0]);
 
     return { tradeId: trade.id, pnl };
   }
@@ -353,10 +355,12 @@ export class PaperTradingEngine {
         exitPrice,
         pnl,
         charges:    exitCharges,
+        stopLoss:   (position as { stopLoss?: number | null }).stopLoss ?? null,
+        target:     (position as { target?: number | null }).target ?? null,
         mode:       'PAPER',
         closedAt:   new Date(),
       },
-    });
+    } as Parameters<typeof prisma.trade.create>[0]);
 
     await prisma.position.delete({ where: { id: position.id } });
 
@@ -409,14 +413,16 @@ export class PaperTradingEngine {
   }
 
   // ─── Mark-to-market update + SL/Target enforcement ───────────────────────────
-  async updatePositionPrices(quotes: Record<string, number>): Promise<void> {
+  // Returns the new total unrealizedPnl so callers (WebSocket) can broadcast it.
+  async updatePositionPrices(quotes: Record<string, number>): Promise<{ unrealizedPnl: number }> {
     const quoteCount = Object.keys(quotes).length;
-    if (quoteCount === 0) return;
+    if (quoteCount === 0) return { unrealizedPnl: 0 };
 
     const openPositions = await prisma.position.findMany({ where: { mode: 'PAPER', isOpen: true } });
-    if (openPositions.length === 0) return;
+    if (openPositions.length === 0) return { unrealizedPnl: 0 };
 
     log.debug('[MTM_TICK]', { quoteCount, positions: openPositions.length });
+    let totalUnrealizedPnl = 0;
 
     for (const pos of openPositions) {
       // pos.symbol may be stored in any format ("RELIANCE", "NSE_EQ:RELIANCE", instrument key).
@@ -476,7 +482,10 @@ export class PaperTradingEngine {
         where: { id: pos.id },
         data: { currentPrice: ltp, unrealizedPnl },
       });
+      totalUnrealizedPnl += unrealizedPnl;
     }
+
+    return { unrealizedPnl: totalUnrealizedPnl };
   }
 
   // ─── Force squareoff all open paper positions (15:25 EOD) ───────────────────

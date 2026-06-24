@@ -4,6 +4,7 @@ import { liveEngine } from './live-engine';
 import { AppError } from '../../middleware/errorHandler';
 import { PlaceOrderRequest, TradingMode } from '../../types';
 import { logger } from '../../utils/logger';
+import { instrumentMappingService } from '../market-data/instrument-mapping';
 
 const log = logger.child({ category: 'TradingService' });
 
@@ -67,7 +68,12 @@ export class TradingService {
       prisma.order.count({ where }),
     ]);
 
-    return { orders, total };
+    const ordersWithDisplay = orders.map((o) => ({
+      ...o,
+      displaySymbol: instrumentMappingService.getTradingSymbol(o.symbol),
+    }));
+
+    return { orders: ordersWithDisplay, total };
   }
 
   async getTrades(
@@ -80,10 +86,30 @@ export class TradingService {
       ...(filters.symbol ? { symbol: { contains: filters.symbol, mode: 'insensitive' as const } } : {}),
     };
 
-    const [trades, total] = await Promise.all([
-      prisma.trade.findMany({ where, orderBy: { createdAt: 'desc' }, take: filters.limit ?? 100, skip: filters.offset ?? 0 }),
+    const [rawTrades, total] = await Promise.all([
+      prisma.trade.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        take: filters.limit ?? 100,
+        skip: filters.offset ?? 0,
+        include: {
+          order: {
+            select: {
+              brokerOrderId: true,
+              strategyId: true,
+              tag: true,
+              strategy: { select: { name: true, type: true } },
+            },
+          },
+        },
+      }),
       prisma.trade.count({ where }),
     ]);
+
+    const trades = rawTrades.map((t) => ({
+      ...t,
+      displaySymbol: instrumentMappingService.getTradingSymbol(t.symbol),
+    }));
 
     // Compute summary
     const winningTrades = trades.filter((t) => (t.pnl ?? 0) > 0);
@@ -105,10 +131,14 @@ export class TradingService {
   }
 
   async getPositions(mode?: TradingMode) {
-    return prisma.position.findMany({
+    const positions = await prisma.position.findMany({
       where: { isOpen: true, ...(mode ? { mode } : {}) },
       orderBy: { openedAt: 'desc' },
     });
+    return positions.map((p) => ({
+      ...p,
+      displaySymbol: instrumentMappingService.getTradingSymbol(p.symbol),
+    }));
   }
 
   async getDashboardSummary(userId: string) {

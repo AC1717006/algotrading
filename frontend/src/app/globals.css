@@ -127,4 +127,30 @@
   .table-header {
     @apply px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider;
   }
+
+  /* ─── Price flash animations ───────────────────────────────────────────── */
+  .flash-up {
+    animation: flashUp 0.5s ease-out forwards;
+  }
+  .flash-down {
+    animation: flashDown 0.5s ease-out forwards;
+  }
+}
+
+@keyframes flashUp {
+  0%   { background-color: rgba(16, 185, 129, 0.35); }
+  100% { background-color: transparent; }
+}
+
+@keyframes flashDown {
+  0%   { background-color: rgba(239, 68, 68, 0.35); }
+  100% { background-color: transparent; }
+}
+
+@keyframes countUp {
+  from { transform: translateY(4px); opacity: 0.6; }
+  to   { transform: translateY(0);   opacity: 1; }
+}
+.animate-count {
+  animation: countUp 0.2s ease-out;
 }

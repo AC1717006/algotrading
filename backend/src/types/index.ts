@@ -159,7 +159,7 @@ export interface StrategyParams {
 
 // ─── WebSocket ────────────────────────────────────────────────────────────────
 export interface WsMessage {
-  type: 'QUOTE' | 'ORDER_UPDATE' | 'POSITION_UPDATE' | 'SIGNAL' | 'ALERT';
+  type: 'QUOTE' | 'ORDER_UPDATE' | 'POSITION_UPDATE' | 'SIGNAL' | 'ALERT' | 'MTM_UPDATE';
   payload: unknown;
   timestamp: number;
 }

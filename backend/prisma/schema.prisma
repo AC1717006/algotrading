@@ -159,6 +159,8 @@ model Trade {
   exitPrice  Float?      @map("exit_price")
   pnl        Float?
   charges    Float       @default(0)
+  stopLoss   Float?      @map("stop_loss")
+  target     Float?
   mode       TradingMode
   closedAt   DateTime?   @map("closed_at")
   createdAt  DateTime    @default(now()) @map("created_at")

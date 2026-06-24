@@ -187,10 +187,19 @@ export class WebSocketService {
             log.debug('[WS_FEED_TICK] Quotes received', { count: quoteCount });
           }
 
-          // Update paper positions mark-to-market
-          await paperEngine.updatePositionPrices(quotes).catch((err) =>
-            log.error('[WS_FEED_TICK] updatePositionPrices failed', { err }),
-          );
+          // Update paper positions mark-to-market and broadcast live PnL
+          const mtm = await paperEngine.updatePositionPrices(quotes).catch((err) => {
+            log.error('[WS_FEED_TICK] updatePositionPrices failed', { err });
+            return { unrealizedPnl: 0 };
+          });
+
+          if (quoteCount > 0) {
+            this.broadcast({
+              type: 'MTM_UPDATE',
+              payload: { unrealizedPnl: mtm.unrealizedPnl, quotes, timestamp: Date.now() },
+              timestamp: Date.now(),
+            });
+          }
         } catch (err) {
           log.error('[WS_FEED] Failed to process message', {
             err: err instanceof Error ? err.message : String(err),

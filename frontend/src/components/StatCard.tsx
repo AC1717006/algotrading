@@ -10,6 +10,7 @@ interface StatCardProps {
   accent?: Accent;
   positive?: boolean;
   negative?: boolean;
+  className?: string;
 }
 
 const ACCENT_BORDER: Record<Accent, string> = {
@@ -19,7 +20,7 @@ const ACCENT_BORDER: Record<Accent, string> = {
   neutral: 'border-l-[var(--border-strong)]',
 };
 
-export function StatCard({ title, value, subtext, icon, accent = 'neutral', positive, negative }: StatCardProps) {
+export function StatCard({ title, value, subtext, icon, accent = 'neutral', positive, negative, className }: StatCardProps) {
   return (
     <div
       className={clsx(
@@ -27,6 +28,7 @@ export function StatCard({ title, value, subtext, icon, accent = 'neutral', posi
         ACCENT_BORDER[accent],
         positive && 'glow-green',
         negative && 'glow-red',
+        className,
       )}
     >
       <p className="stat-label flex items-center gap-1.5">

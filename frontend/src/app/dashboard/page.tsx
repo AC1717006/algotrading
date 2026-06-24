@@ -1,7 +1,7 @@
 'use client';
 
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { tradingApi } from '@/lib/api';
 import { usePollInterval } from '@/hooks/usePollInterval';
 import { StatCard } from '@/components/StatCard';
@@ -13,11 +13,26 @@ function formatCurrency(n: number) {
   return `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+// Flash a value when it changes (green for up, red for down)
+function useFlash(value: number) {
+  const prev = useRef(value);
+  const [flash, setFlash] = useState<'up' | 'down' | null>(null);
+  useEffect(() => {
+    if (value === prev.current) return;
+    setFlash(value > prev.current ? 'up' : 'down');
+    prev.current = value;
+    const t = setTimeout(() => setFlash(null), 500);
+    return () => clearTimeout(t);
+  }, [value]);
+  return flash;
+}
+
 export default function DashboardPage() {
   const qc = useQueryClient();
   const [liveQuotes, setLiveQuotes] = useState<Record<string, number>>({});
   const [selectedSymbol, setSelectedSymbol] = useState<string | undefined>(undefined);
   const [watchlistSymbols, setWatchlistSymbols] = useState<string[]>([]);
+  const [liveUnrealizedPnl, setLiveUnrealizedPnl] = useState<number | null>(null);
 
   const pollInterval = usePollInterval();
 
@@ -38,6 +53,10 @@ export default function DashboardPage() {
       const q = msg.payload as { symbol: string; ltp: number };
       setLiveQuotes((prev) => ({ ...prev, [q.symbol]: q.ltp }));
     }
+    if (msg.type === 'MTM_UPDATE') {
+      const p = msg.payload as { unrealizedPnl: number };
+      setLiveUnrealizedPnl(p.unrealizedPnl);
+    }
     if (msg.type === 'ORDER_UPDATE') {
       qc.invalidateQueries({ queryKey: ['open-orders'] });
     }
@@ -47,8 +66,11 @@ export default function DashboardPage() {
 
   const paperBalance = summary?.paperBalance as number | undefined;
   const dailyPnl = summary?.dailyPnl as number | undefined;
-  const unrealizedPnl = summary?.unrealizedPnl as number | undefined;
+  // Use live WebSocket value if available, fall back to polled summary
+  const unrealizedPnl = liveUnrealizedPnl ?? (summary?.unrealizedPnl as number | undefined);
   const openPositions = summary?.openPositions as number | undefined;
+
+  const openPnlFlash = useFlash(unrealizedPnl ?? 0);
 
   return (
     <div className="space-y-6">
@@ -84,6 +106,7 @@ export default function DashboardPage() {
           positive={(unrealizedPnl ?? 0) > 0}
           negative={(unrealizedPnl ?? 0) < 0}
           subtext="Unrealized"
+          className={openPnlFlash === 'up' ? 'flash-up' : openPnlFlash === 'down' ? 'flash-down' : ''}
         />
         <StatCard
           title="Open Positions"
@@ -160,7 +183,10 @@ export default function DashboardPage() {
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             {Object.entries(liveQuotes).map(([symbol, ltp]) => (
               <div key={symbol} className="bg-gray-800 rounded-lg px-3 py-2">
-                <p className="text-xs text-gray-400 truncate">{symbol.split('|').pop()}</p>
+                {/* Show bare trading symbol — strip exchange prefix if still raw */}
+                <p className="text-xs text-gray-400 truncate font-medium">
+                  {symbol.includes('|') ? symbol.split('|').pop() : symbol}
+                </p>
                 <p className="text-sm font-bold text-white">{formatCurrency(ltp)}</p>
               </div>
             ))}
