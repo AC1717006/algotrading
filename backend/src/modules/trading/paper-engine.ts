@@ -15,6 +15,19 @@ function positionSide(pos: { side?: unknown }): 'BUY' | 'SELL' {
   return (pos.side as 'BUY' | 'SELL') ?? 'BUY';
 }
 
+// Minimal fields needed for close / pyramid operations.
+// Passed from placeOrder → closePosition / openPosition so all three
+// share the same DB row and there is no second findFirst() call.
+type PositionHint = {
+  id: string;
+  qty: number;
+  avgPrice: number;
+  strategyId?: string | null;
+  stopLoss?: number | null;
+  target?: number | null;
+  side?: unknown;
+} | null;
+
 type AutoExitPosition = {
   id: string;
   symbol: string;
@@ -74,11 +87,19 @@ export class PaperTradingEngine {
     const orderValue = qty * fillPrice;
     const charges = orderValue * BROKERAGE;
 
-    // Check if an opposite-direction position already exists (close scenario)
+    // Single authoritative lookup — passed to closePosition / openPosition so
+    // all three operate on the same DB row (eliminates dual-findFirst divergence).
+    // strategyId scoping ensures each strategy only interacts with its own position.
     const existingPos = await prisma.position.findFirst({
-      where: { symbol: req.symbol, mode: 'PAPER', isOpen: true },
-    });
-    const existingSide = existingPos ? positionSide(existingPos as { side?: unknown }) : null;
+      where: {
+        symbol: req.symbol,
+        mode: 'PAPER',
+        isOpen: true,
+        ...(req.strategyId ? { strategyId: req.strategyId } : {}),
+      },
+      orderBy: { openedAt: 'desc' },
+    }) as PositionHint;
+    const existingSide = existingPos ? positionSide(existingPos) : null;
 
     // Determine action:
     // BUY  + no pos        → open LONG    (deduct orderValue + charges)
@@ -117,8 +138,7 @@ export class PaperTradingEngine {
 
     if (isClosingLong) {
       // SELL to close LONG — credit proceeds, deduct both-leg charges
-      const { tradeId, pnl } = await this.closePosition(order.id, req, fillPrice, charges, userId, 'BUY');
-      // Balance: return the sale proceeds minus sell charges (entry charges already counted in PnL)
+      const { tradeId, pnl } = await this.closePosition(order.id, req, fillPrice, charges, userId, 'BUY', existingPos);
       await this.adjustBalance(userId, orderValue - charges);
       log.info('[POSITION_CLOSE] Long closed', { symbol: req.symbol, qty, exitPrice: fillPrice, pnl });
       await telegramService.notifySell(req.symbol, qty, fillPrice, pnl ?? 0, 'PAPER');
@@ -127,8 +147,7 @@ export class PaperTradingEngine {
 
     if (isClosingShort) {
       // BUY to cover SHORT — deduct cost of covering
-      const { tradeId, pnl } = await this.closePosition(order.id, req, fillPrice, charges, userId, 'SELL');
-      // Balance: deduct the buy-back cost
+      const { tradeId, pnl } = await this.closePosition(order.id, req, fillPrice, charges, userId, 'SELL', existingPos);
       await this.adjustBalance(userId, -(orderValue + charges));
       log.info('[POSITION_CLOSE] Short covered', { symbol: req.symbol, qty, coverPrice: fillPrice, pnl });
       await telegramService.notifySell(req.symbol, qty, fillPrice, pnl ?? 0, 'PAPER');
@@ -138,15 +157,14 @@ export class PaperTradingEngine {
     if (req.side === 'BUY') {
       // Opening LONG
       await this.adjustBalance(userId, -(orderValue + charges));
-      const tradeId = await this.openPosition(order.id, req, fillPrice, charges, 'BUY');
+      const tradeId = await this.openPosition(order.id, req, fillPrice, charges, 'BUY', existingPos);
       log.info('[POSITION_OPEN] Long opened', { symbol: req.symbol, qty, avgPrice: fillPrice, charges });
       await telegramService.notifyBuy(req.symbol, qty, fillPrice, 'PAPER');
       return { orderId: order.id, tradeId };
     } else {
       // Opening SHORT (SELL with no existing BUY position)
-      // Receive proceeds minus charges (margin accounted for via balance reduction later on cover)
       await this.adjustBalance(userId, orderValue - charges);
-      const tradeId = await this.openPosition(order.id, req, fillPrice, charges, 'SELL');
+      const tradeId = await this.openPosition(order.id, req, fillPrice, charges, 'SELL', existingPos);
       log.info('[POSITION_OPEN] Short opened', { symbol: req.symbol, qty, avgPrice: fillPrice, charges });
       await telegramService.notifyBuy(req.symbol, qty, fillPrice, 'PAPER');
       return { orderId: order.id, tradeId };
@@ -160,13 +178,13 @@ export class PaperTradingEngine {
     fillPrice: number,
     charges: number,
     side: 'BUY' | 'SELL',
+    existingPosHint: PositionHint = null,
   ): Promise<string> {
     const qty = req.qty ?? 1;
-    const existing = await prisma.position.findFirst({
-      where: { symbol: req.symbol, mode: 'PAPER', isOpen: true },
-    });
+    // Re-use the position already fetched in placeOrder — avoids a third findFirst().
+    const existing = existingPosHint;
 
-    if (existing && positionSide(existing as { side?: unknown }) === side) {
+    if (existing && positionSide(existing) === side) {
       // Pyramid into existing same-direction position
       const totalQty = existing.qty + qty;
       const avgPrice = (existing.avgPrice * existing.qty + fillPrice * qty) / totalQty;
@@ -185,22 +203,19 @@ export class PaperTradingEngine {
         ? (req.target ?? fillPrice * (1 + 0.04))
         : (req.target ?? fillPrice * (1 - 0.04));
 
-      // Use a raw $executeRaw workaround to pass the new `side` field
-      // that exists in DB (via migration) but not yet in Prisma generated types.
-      // Once Prisma client is regenerated (npx prisma generate), this cast can be removed.
-      await (prisma.position.create as unknown as (args: { data: Record<string, unknown> }) => Promise<unknown>)({
+      await prisma.position.create({
         data: {
-          symbol:     req.symbol,
-          exchange:   req.exchange,
+          symbol:       req.symbol,
+          exchange:     req.exchange,
           qty,
-          avgPrice:   fillPrice,
+          avgPrice:     fillPrice,
           currentPrice: fillPrice,
           stopLoss,
           target,
-          product:    req.product,
-          mode:       'PAPER',
-          strategyId: req.strategyId ?? null,
-          side,       // NEW FIELD — requires migration to add to DB schema
+          product:      req.product,
+          mode:         'PAPER',
+          strategyId:   req.strategyId ?? null,
+          side,
         },
       });
       log.debug('[POSITION_OPEN] New paper position created', { symbol: req.symbol, side, qty, avgPrice: fillPrice, stopLoss, target });
@@ -230,16 +245,46 @@ export class PaperTradingEngine {
     exitCharges: number,
     _userId: string,
     originalSide: 'BUY' | 'SELL', // the ENTRY side of the position being closed
+    positionHint: PositionHint,    // pre-fetched by placeOrder — no second findFirst
   ): Promise<{ tradeId: string; pnl: number | null }> {
-    const position = await prisma.position.findFirst({
-      where: { symbol: req.symbol, mode: 'PAPER', isOpen: true },
-    });
+    // Use the position found by placeOrder.
+    // Previously a second independent findFirst() ran here, which could return a
+    // different row when multiple same-symbol positions existed, causing PnL to be
+    // computed against the wrong avgPrice (root cause of the -870 vs +812 bug).
+    const position = positionHint;
 
-    let pnl: number | null = null;
     const closeQty = req.qty ?? 1;
 
+    log.info('[PNL_AUDIT]', {
+      symbol:         req.symbol,
+      reqQty:         closeQty,
+      positionId:     position?.id,
+      strategyId:     position?.strategyId,
+      avgPrice:       position?.avgPrice,
+      positionQty:    position?.qty,
+      positionSideDb: position ? positionSide(position) : null,
+      fillPrice,
+      originalSide,
+      exitSide:       originalSide === 'BUY' ? 'SELL' : 'BUY',
+      expectedPnl:    position
+        ? originalSide === 'BUY'
+          ? (fillPrice - position.avgPrice) * closeQty
+          : (position.avgPrice - fillPrice) * closeQty
+        : null,
+    });
+
     if (position) {
-      // Both legs' charges reduce PnL
+      const posDbSide = positionSide(position);
+      if (posDbSide !== originalSide) {
+        log.error('[PNL_AUDIT] DIRECTION MISMATCH — position.side in DB differs from originalSide', {
+          symbol: req.symbol, positionId: position.id, posDbSide, originalSide,
+        });
+      }
+    }
+
+    let pnl: number | null = null;
+
+    if (position) {
       const entryCharges = position.avgPrice * closeQty * BROKERAGE;
       const totalCharges = exitCharges + entryCharges;
 
